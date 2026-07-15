@@ -1,6 +1,10 @@
 "use client";
 
-import { FormEvent, use, useState } from "react";
+import type { FormEvent } from "react";
+import { use, useState } from "react";
+
+import { AuthShell } from "@/components/auth-shell";
+import { Button, Field, Toast } from "@/components/ui";
 
 export default function ActivatePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
@@ -31,24 +35,31 @@ export default function ActivatePage({ params }: { params: Promise<{ token: stri
   }
 
   return (
-    <main>
-      <h1>パスワードを設定</h1>
-      <form onSubmit={submit}>
-        <label>
-          パスワード（12文字以上）
-          <input
-            autoComplete="new-password"
-            minLength={12}
-            name="password"
-            required
-            type="password"
-          />
-        </label>
-        {error ? <p role="alert">{error}</p> : null}
-        <button disabled={submitting} type="submit">
+    <AuthShell
+      description="招待されたアカウントを有効にするため、ログイン用のパスワードを登録します。"
+      eyebrow="ACCOUNT ACTIVATION"
+      title="パスワードを設定"
+    >
+      <form className="auth-form" onSubmit={submit}>
+        <Field
+          autoComplete="new-password"
+          autoFocus
+          id="password"
+          label="パスワード（12文字以上）"
+          minLength={12}
+          name="password"
+          placeholder="12文字以上で入力"
+          required
+          type="password"
+        />
+        <Toast tone="error">{error}</Toast>
+        <Button className="auth-submit" disabled={submitting} type="submit">
           {submitting ? "設定中…" : "設定してログイン"}
-        </button>
+        </Button>
       </form>
-    </main>
+      <p className="auth-help">
+        安全のため、他のサービスで使用していないパスワードを設定してください。
+      </p>
+    </AuthShell>
   );
 }

@@ -1,6 +1,10 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import type { FormEvent } from "react";
+import { useState } from "react";
+
+import { AuthShell } from "@/components/auth-shell";
+import { Button, Field, Toast } from "@/components/ui";
 
 export default function LoginPage() {
   const [error, setError] = useState<string>();
@@ -29,22 +33,37 @@ export default function LoginPage() {
   }
 
   return (
-    <main>
-      <h1>ログイン</h1>
-      <form onSubmit={submit}>
-        <label>
-          メールアドレス
-          <input autoComplete="email" name="email" required type="email" />
-        </label>
-        <label>
-          パスワード
-          <input autoComplete="current-password" name="password" required type="password" />
-        </label>
-        {error ? <p role="alert">{error}</p> : null}
-        <button disabled={submitting} type="submit">
+    <AuthShell
+      description="組織のアカウントでログインしてください。"
+      eyebrow="WELCOME BACK"
+      title="おかえりなさい"
+    >
+      <form className="auth-form" onSubmit={submit}>
+        <Field
+          autoComplete="email"
+          autoFocus
+          id="email"
+          label="メールアドレス"
+          name="email"
+          placeholder="name@company.jp"
+          required
+          type="email"
+        />
+        <Field
+          autoComplete="current-password"
+          id="password"
+          label="パスワード"
+          name="password"
+          placeholder="パスワードを入力"
+          required
+          type="password"
+        />
+        <Toast tone="error">{error}</Toast>
+        <Button className="auth-submit" disabled={submitting} type="submit">
           {submitting ? "ログイン中…" : "ログイン"}
-        </button>
+        </Button>
       </form>
-    </main>
+      <p className="auth-help">ログイン情報が不明な場合は、組織の管理者にお問い合わせください。</p>
+    </AuthShell>
   );
 }

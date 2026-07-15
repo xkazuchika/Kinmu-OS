@@ -176,6 +176,51 @@ test.beforeAll(async ({ request }) => {
   await prepareAccounts(request);
 });
 
+test("public landing introduces the product and leads to login", async ({ page }) => {
+  const consoleProblems = collectConsoleProblems(page);
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { level: 1, name: "勤怠と労務を、 すっきりひとつに。" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Kinmu-OSの管理画面プレビュー")).toBeVisible();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-root-after-desktop.png" });
+
+  await page.setViewportSize({ height: 720, width: 320 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-root-after-mobile.png" });
+
+  await page.getByRole("link", { name: "ログイン" }).first().click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { level: 1, name: "おかえりなさい" })).toBeVisible();
+  expect(consoleProblems).toEqual([]);
+});
+
+test("authentication shell is polished and responsive", async ({ page }) => {
+  const consoleProblems = collectConsoleProblems(page);
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await page.goto("/login");
+
+  await expect(page.getByRole("heading", { level: 1, name: "おかえりなさい" })).toBeVisible();
+  await expect(page.getByText("勤怠と労務を、")).toBeVisible();
+  await expect(page.getByLabel("メールアドレス")).toBeFocused();
+  await page.getByLabel("メールアドレス").fill("design-check@example.com");
+  await page.getByLabel("パスワード").fill("DesignCheck-2026!");
+  await expect(page.getByRole("button", { name: "ログイン" })).toBeEnabled();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-login-after-desktop.png" });
+
+  await page.setViewportSize({ height: 720, width: 320 });
+  await expect(page.locator(".auth-mobile-brand").getByText("KINMU-OS")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-login-after-mobile.png" });
+  expect(consoleProblems).toEqual([]);
+});
+
 test("desktop user management shell and confirmation are accessible", async ({ page }) => {
   const consoleProblems = collectConsoleProblems(page);
   await page.setViewportSize({ height: 900, width: 1440 });

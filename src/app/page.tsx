@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { AppShell } from "@/components/app-shell";
 import { AttendancePanel } from "@/components/attendance-panel";
-import { ClockIcon, ReportIcon } from "@/components/icons";
+import { ClockIcon, HomeIcon, PeopleIcon, ReportIcon, ShieldIcon } from "@/components/icons";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { sessionForToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { getAttendanceState, type PunchType } from "@/lib/attendance";
@@ -105,22 +105,128 @@ function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof manage
   );
 }
 
+function PublicLanding() {
+  return (
+    <main className="landing-page">
+      <header className="landing-header">
+        <Link className="landing-brand" href="/">
+          <span aria-hidden="true">K</span>
+          KINMU-OS
+        </Link>
+        <nav aria-label="公開メニュー" className="landing-nav">
+          <a href="https://github.com/xkazuchika/Kinmu-OS">GitHub</a>
+          <Link className="landing-nav__login" href="/login">
+            ログイン
+          </Link>
+        </nav>
+      </header>
+
+      <section className="landing-hero">
+        <div className="landing-copy">
+          <h1>
+            勤怠と労務を、
+            <br />
+            すっきりひとつに。
+          </h1>
+          <p className="landing-lead">
+            従業員100名以下のチームのための、セルフホスト型労務管理ソフトです。
+            毎日の出退勤から従業員台帳、残業集計まで、必要な仕事を迷わず進められます。
+          </p>
+          <div className="landing-actions">
+            <Link className="landing-action landing-action--primary" href="/login">
+              ログイン
+            </Link>
+            <Link className="landing-action landing-action--secondary" href="/setup">
+              初期設定を始める
+            </Link>
+          </div>
+          <ul className="landing-points">
+            <li>
+              <ShieldIcon /> データを自社環境で管理
+            </li>
+            <li>
+              <PeopleIcon /> 100名以下のチームに最適
+            </li>
+          </ul>
+        </div>
+
+        <div aria-label="Kinmu-OSの管理画面プレビュー" className="landing-preview">
+          <div className="landing-preview__bar">
+            <span />
+            <span />
+            <span />
+            <small>kinmu-os.local</small>
+          </div>
+          <div className="landing-preview__app">
+            <aside>
+              <strong>KINMU-OS</strong>
+              <ul>
+                <li className="is-current">
+                  <HomeIcon /> ホーム
+                </li>
+                <li>
+                  <PeopleIcon /> 従業員
+                </li>
+                <li>
+                  <ClockIcon /> 勤怠
+                </li>
+                <li>
+                  <ReportIcon /> レポート
+                </li>
+              </ul>
+            </aside>
+            <div className="landing-preview__content">
+              <header>
+                <div>
+                  <h2>今日の状況</h2>
+                  <p>確認が必要な項目をまとめます。</p>
+                </div>
+                <span aria-hidden="true" className="landing-preview__avatar">
+                  K
+                </span>
+              </header>
+              <dl>
+                <div>
+                  <dt>在籍従業員</dt>
+                  <dd>—</dd>
+                </div>
+                <div>
+                  <dt>未退勤</dt>
+                  <dd>—</dd>
+                </div>
+                <div>
+                  <dt>今月の残業</dt>
+                  <dd>—</dd>
+                </div>
+              </dl>
+              <section>
+                <h3>従業員別の残業</h3>
+                <div className="landing-preview__empty">
+                  <ReportIcon />
+                  <strong>勤務実績をすっきり確認</strong>
+                  <span>集計結果がここに表示されます</span>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer className="landing-footer">
+        <span>Kinmu-OS</span>
+        <span>あなたの職場のデータを、あなたの管理下に。</span>
+      </footer>
+    </main>
+  );
+}
+
 export default async function HomePage() {
   const cookieStore = await cookies();
   const database = getDatabase();
   const actor = await sessionForToken(database, cookieStore.get(SESSION_COOKIE_NAME)?.value);
 
   if (!actor) {
-    return (
-      <main className="landing-page">
-        <h1>毎日の勤怠を、もっと静かに、確かに。</h1>
-        <p>従業員100名以下のチームのための、セルフホスト型勤怠管理ソフトです。</p>
-        <div className="landing-actions">
-          <Link href="/login">ログイン</Link>
-          <Link href="/setup">初期設定</Link>
-        </div>
-      </main>
-    );
+    return <PublicLanding />;
   }
 
   let employeeHome = (

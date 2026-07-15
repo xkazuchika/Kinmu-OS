@@ -1,6 +1,10 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import type { FormEvent } from "react";
+import { useState } from "react";
+
+import { AuthShell } from "@/components/auth-shell";
+import { Button, Field, Toast } from "@/components/ui";
 
 type SetupResult = { error?: string; setupUrl?: string };
 
@@ -33,37 +37,47 @@ export default function SetupPage() {
   }
 
   return (
-    <main>
-      <h1>Kinmu-OS を始める</h1>
+    <AuthShell
+      description="最初の組織と、管理を始める所有者アカウントを登録します。"
+      eyebrow="INITIAL SETUP"
+      title="Kinmu-OSをセットアップ"
+    >
       {setupUrl ? (
-        <section aria-live="polite">
+        <section aria-live="polite" className="auth-success">
+          <span aria-hidden="true" className="auth-success__icon">
+            ✓
+          </span>
+          <h2>準備ができました</h2>
           <p>初期設定リンクを発行しました。パスワードを設定して開始してください。</p>
-          <a href={setupUrl}>{setupUrl}</a>
+          <a className="ui-button ui-button--primary auth-submit" href={setupUrl}>
+            パスワードを設定する
+          </a>
         </section>
       ) : (
-        <form onSubmit={submit}>
-          <label>
-            組織名
-            <input name="organizationName" required />
-          </label>
-          <label>
-            タイムゾーン
-            <input defaultValue="Asia/Tokyo" name="timezone" required />
-          </label>
-          <label>
-            所有者名
-            <input name="ownerName" required />
-          </label>
-          <label>
-            所有者メールアドレス
-            <input name="ownerEmail" required type="email" />
-          </label>
-          {error ? <p role="alert">{error}</p> : null}
-          <button disabled={submitting} type="submit">
+        <form className="auth-form" onSubmit={submit}>
+          <Field id="organizationName" label="組織名" name="organizationName" required />
+          <Field
+            defaultValue="Asia/Tokyo"
+            id="timezone"
+            label="タイムゾーン"
+            name="timezone"
+            required
+          />
+          <Field id="ownerName" label="所有者名" name="ownerName" required />
+          <Field
+            autoComplete="email"
+            id="ownerEmail"
+            label="所有者メールアドレス"
+            name="ownerEmail"
+            required
+            type="email"
+          />
+          <Toast tone="error">{error}</Toast>
+          <Button className="auth-submit" disabled={submitting} type="submit">
             {submitting ? "設定中…" : "初期設定を作成"}
-          </button>
+          </Button>
         </form>
       )}
-    </main>
+    </AuthShell>
   );
 }
