@@ -1,0 +1,2 @@
+ALTER TABLE "attendance_events" ADD COLUMN "recorded_by_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "attendance_events" ADD CONSTRAINT "attendance_events_recorded_by_user_id_users_id_fk" FOREIGN KEY ("recorded_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;

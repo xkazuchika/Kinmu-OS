@@ -1,0 +1,2 @@
+employeeNumber,familyName,givenName,displayName,contactEmail,departmentCode,joinedOn,employmentType,status
+E001,山田,花子,山田 花子,hanako@example.com,HR,2026-04-01,full_time,active

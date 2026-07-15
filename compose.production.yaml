@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kinmu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${POSTGRES_USER:-kinmu}
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kinmu} -d ${POSTGRES_DB:-kinmu}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrator:
+    build:
+      context: .
+      target: migrator
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kinmu}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kinmu}
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runner
+    environment:
+      APP_URL: ${APP_URL:?APP_URL is required}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kinmu}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kinmu}
+      NODE_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      SOURCE_CODE_URL: ${SOURCE_CODE_URL:?SOURCE_CODE_URL is required}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT:-3100}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  postgres-data:

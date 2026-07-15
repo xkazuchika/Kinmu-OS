@@ -1,0 +1,13 @@
+.git
+.next
+.codex
+.opencode
+node_modules
+coverage
+openspec
+backups
+playwright-report
+test-results
+.env
+.env.*
+!.env.example

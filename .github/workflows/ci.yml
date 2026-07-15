@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kinmu_test
+          POSTGRES_PASSWORD: kinmu
+          POSTGRES_USER: kinmu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kinmu -d kinmu_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kinmu:kinmu@localhost:5432/kinmu_test
+      TEST_DATABASE_URL: postgresql://kinmu:kinmu@localhost:5432/kinmu_test
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Migrate test database
+        run: pnpm db:migrate
+
+      - name: Check types
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Build application
+        run: pnpm build
+
+      - name: Audit production dependencies
+        run: pnpm security:audit
+
+      - name: List production dependency licenses
+        run: pnpm licenses:check

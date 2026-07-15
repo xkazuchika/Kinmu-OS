@@ -1,0 +1,12 @@
+node_modules/
+.next/
+coverage/
+.env*
+!.env.example
+!.env.production.example
+*.tsbuildinfo
+pnpm-debug.log*
+.pnpm-store/
+backups/
+playwright-report/
+test-results/
