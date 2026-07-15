@@ -6,6 +6,7 @@ import type {
   Ref,
   ReactNode,
   SelectHTMLAttributes,
+  TextareaHTMLAttributes,
 } from "react";
 import { useEffect, useRef } from "react";
 
@@ -80,6 +81,26 @@ export function SelectField({
       <select aria-describedby={errorId} aria-invalid={Boolean(error)} id={id} {...props}>
         {children}
       </select>
+      {error ? (
+        <small id={errorId} role="alert">
+          {error}
+        </small>
+      ) : null}
+    </label>
+  );
+}
+
+export function TextareaField({
+  error,
+  id,
+  label,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { error?: string; label: string }) {
+  const errorId = error ? `${id}-error` : undefined;
+  return (
+    <label className="ui-field" htmlFor={id}>
+      <span>{label}</span>
+      <textarea aria-describedby={errorId} aria-invalid={Boolean(error)} id={id} {...props} />
       {error ? (
         <small id={errorId} role="alert">
           {error}

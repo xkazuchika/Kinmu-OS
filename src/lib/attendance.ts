@@ -4,6 +4,7 @@ import type { SessionActor } from "@/lib/authorization";
 import type { AppDatabase } from "@/lib/db/client";
 import {
   attendanceDays,
+  attendanceCorrectionRequests,
   attendanceEventType,
   attendanceEvents,
   dailyAttendanceSummaries,
@@ -18,12 +19,119 @@ import { calculateDailyMinutes, workDateFor, type WorkDate } from "@/lib/time";
 
 export type PunchType = (typeof attendanceEventType.enumValues)[number];
 type QueryDatabase = Pick<AppDatabase, "select">;
+type MutationDatabase = Pick<AppDatabase, "delete" | "insert" | "update">;
+
+export type AttendanceEventRecord = {
+  correctionRequestId?: string | null;
+  id?: string;
+  occurredAt: Date;
+  source?: string;
+  type: PunchType;
+};
 
 export class AttendanceError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AttendanceError";
   }
+}
+
+export function validateAttendanceEventSequence(
+  events: ReadonlyArray<AttendanceEventRecord>,
+  options: { allowOpenBreak?: boolean } = {},
+): PunchType | "none" {
+  let state: PunchType | "none" = "none";
+  let previousTime = Number.NEGATIVE_INFINITY;
+
+  for (const event of events) {
+    if (!attendanceEventType.enumValues.includes(event.type)) {
+      throw new AttendanceError("打刻種別が正しくありません。");
+    }
+    const time = event.occurredAt.getTime();
+    if (!Number.isFinite(time)) {
+      throw new AttendanceError("打刻時刻が正しくありません。");
+    }
+    if (time <= previousTime) {
+      throw new AttendanceError("打刻時刻は前の記録より後にしてください。");
+    }
+    if (!nextActions[state].includes(event.type)) {
+      throw new AttendanceError("出勤・休憩・退勤の順序が正しくありません。");
+    }
+    state = event.type;
+    previousTime = time;
+  }
+
+  if (state === "break_start" && !options.allowOpenBreak) {
+    throw new AttendanceError("休憩開始には対応する休憩終了が必要です。");
+  }
+
+  return state;
+}
+
+export async function effectiveAttendanceEvents(db: QueryDatabase, attendanceDayId: string) {
+  return db
+    .select({
+      correctionRequestId: attendanceEvents.correctionRequestId,
+      id: attendanceEvents.id,
+      occurredAt: attendanceEvents.occurredAt,
+      source: attendanceEvents.source,
+      type: attendanceEvents.type,
+    })
+    .from(attendanceEvents)
+    .where(
+      and(
+        eq(attendanceEvents.attendanceDayId, attendanceDayId),
+        isNull(attendanceEvents.supersededByCorrectionRequestId),
+      ),
+    )
+    .orderBy(asc(attendanceEvents.occurredAt));
+}
+
+export async function recomputeAttendanceDay(
+  db: QueryDatabase & MutationDatabase,
+  day: typeof attendanceDays.$inferSelect,
+  events: ReadonlyArray<AttendanceEventRecord>,
+) {
+  const state = validateAttendanceEventSequence(events, { allowOpenBreak: true });
+  const completed = state === "clock_out";
+  const now = new Date();
+
+  await db
+    .update(attendanceDays)
+    .set({ status: completed ? "complete" : "open", updatedAt: now })
+    .where(eq(attendanceDays.id, day.id));
+
+  if (!completed) {
+    await db
+      .delete(dailyAttendanceSummaries)
+      .where(eq(dailyAttendanceSummaries.attendanceDayId, day.id));
+    return { state, status: "open" as const };
+  }
+
+  const breaks: Array<{ endedAt: Date; startedAt: Date }> = [];
+  let breakStart: Date | undefined;
+  for (const event of events) {
+    if (event.type === "break_start") breakStart = event.occurredAt;
+    if (event.type === "break_end" && breakStart) {
+      breaks.push({ endedAt: event.occurredAt, startedAt: breakStart });
+      breakStart = undefined;
+    }
+  }
+  const minutes = calculateDailyMinutes({
+    breaks,
+    clockInAt: events.find((event) => event.type === "clock_in")?.occurredAt,
+    clockOutAt: events.find((event) => event.type === "clock_out")?.occurredAt,
+    scheduledMinutes: day.scheduledMinutes,
+  });
+  await db
+    .insert(dailyAttendanceSummaries)
+    .values({ attendanceDayId: day.id, ...minutes, status: "complete" })
+    .onConflictDoUpdate({
+      target: dailyAttendanceSummaries.attendanceDayId,
+      set: { ...minutes, computedAt: now, status: "complete" },
+    });
+
+  return { minutes, state, status: "complete" as const };
 }
 
 function monthRange(month: string) {
@@ -35,39 +143,103 @@ function monthRange(month: string) {
 
 export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor, month: string) {
   const [employee] = await db
-    .select({ id: employees.id })
+    .select({ id: employees.id, timezone: organizations.timezone })
     .from(employees)
+    .innerJoin(organizations, eq(organizations.id, employees.organizationId))
     .where(
       and(eq(employees.organizationId, actor.organizationId), eq(employees.userId, actor.userId)),
     )
     .limit(1);
   if (!employee) throw new AttendanceError("従業員情報が紐付いていません。");
   const range = monthRange(month);
-  const days = await db
-    .select({
-      breakMinutes: dailyAttendanceSummaries.breakMinutes,
-      id: attendanceDays.id,
-      overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
-      scheduledMinutes: attendanceDays.scheduledMinutes,
-      status: attendanceDays.status,
-      workDate: attendanceDays.workDate,
-      workedMinutes: dailyAttendanceSummaries.workedMinutes,
-    })
-    .from(attendanceDays)
-    .leftJoin(
-      dailyAttendanceSummaries,
-      eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
-    )
-    .where(
-      and(
-        eq(attendanceDays.employeeId, employee.id),
-        gte(attendanceDays.workDate, range.from),
-        lt(attendanceDays.workDate, range.to),
-      ),
-    )
-    .orderBy(desc(attendanceDays.workDate));
+  const [dayRows, eventRows, correctionRows] = await Promise.all([
+    db
+      .select({
+        breakMinutes: dailyAttendanceSummaries.breakMinutes,
+        id: attendanceDays.id,
+        isCorrected: sql<boolean>`exists (
+          select 1 from ${attendanceEvents}
+          where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
+            and ${attendanceEvents.correctionRequestId} is not null
+            and ${attendanceEvents.supersededByCorrectionRequestId} is null
+        )`,
+        overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
+        scheduledMinutes: attendanceDays.scheduledMinutes,
+        status: attendanceDays.status,
+        workDate: attendanceDays.workDate,
+        workedMinutes: dailyAttendanceSummaries.workedMinutes,
+      })
+      .from(attendanceDays)
+      .leftJoin(
+        dailyAttendanceSummaries,
+        eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
+      )
+      .where(
+        and(
+          eq(attendanceDays.employeeId, employee.id),
+          gte(attendanceDays.workDate, range.from),
+          lt(attendanceDays.workDate, range.to),
+        ),
+      )
+      .orderBy(desc(attendanceDays.workDate)),
+    db
+      .select({
+        attendanceDayId: attendanceEvents.attendanceDayId,
+        id: attendanceEvents.id,
+        occurredAt: attendanceEvents.occurredAt,
+        type: attendanceEvents.type,
+      })
+      .from(attendanceEvents)
+      .innerJoin(attendanceDays, eq(attendanceDays.id, attendanceEvents.attendanceDayId))
+      .where(
+        and(
+          eq(attendanceDays.employeeId, employee.id),
+          gte(attendanceDays.workDate, range.from),
+          lt(attendanceDays.workDate, range.to),
+          isNull(attendanceEvents.supersededByCorrectionRequestId),
+        ),
+      )
+      .orderBy(asc(attendanceEvents.occurredAt)),
+    db
+      .select({
+        id: attendanceCorrectionRequests.id,
+        status: attendanceCorrectionRequests.status,
+        workDate: attendanceCorrectionRequests.workDate,
+      })
+      .from(attendanceCorrectionRequests)
+      .where(
+        and(
+          eq(attendanceCorrectionRequests.employeeId, employee.id),
+          gte(attendanceCorrectionRequests.workDate, range.from),
+          lt(attendanceCorrectionRequests.workDate, range.to),
+        ),
+      )
+      .orderBy(desc(attendanceCorrectionRequests.createdAt)),
+  ]);
+  const eventsByDay = new Map<string, typeof eventRows>();
+  for (const event of eventRows) {
+    const events = eventsByDay.get(event.attendanceDayId) ?? [];
+    events.push(event);
+    eventsByDay.set(event.attendanceDayId, events);
+  }
+  const latestCorrectionByDate = new Map<string, (typeof correctionRows)[number]>();
+  for (const correction of correctionRows) {
+    if (!latestCorrectionByDate.has(correction.workDate)) {
+      latestCorrectionByDate.set(correction.workDate, correction);
+    }
+  }
+  const days = dayRows.map((day) => ({
+    ...day,
+    correction: latestCorrectionByDate.get(day.workDate) ?? null,
+    events: (eventsByDay.get(day.id) ?? []).map((event) => ({
+      id: event.id,
+      occurredAt: event.occurredAt.toISOString(),
+      type: event.type,
+    })),
+  }));
   return {
     days,
+    timezone: employee.timezone,
     totals: days.reduce(
       (total, day) => ({
         overtimeMinutes: total.overtimeMinutes + (day.overtimeMinutes ?? 0),
@@ -105,6 +277,12 @@ export async function listManagedAttendance(
       departmentName: departments.name,
       displayName: employees.displayName,
       employeeId: employees.id,
+      isCorrected: sql<boolean>`exists (
+        select 1 from ${attendanceEvents}
+        where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
+          and ${attendanceEvents.correctionRequestId} is not null
+          and ${attendanceEvents.supersededByCorrectionRequestId} is null
+      )`,
       overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
       scheduledMinutes: attendanceDays.scheduledMinutes,
       status: attendanceDays.status,
@@ -178,13 +356,7 @@ async function relevantDay(db: QueryDatabase, employeeId: string, today: string)
 }
 
 async function stateForDay(db: QueryDatabase, day: typeof attendanceDays.$inferSelect | undefined) {
-  const events = day
-    ? await db
-        .select({ occurredAt: attendanceEvents.occurredAt, type: attendanceEvents.type })
-        .from(attendanceEvents)
-        .where(eq(attendanceEvents.attendanceDayId, day.id))
-        .orderBy(asc(attendanceEvents.occurredAt))
-    : [];
+  const events = day ? await effectiveAttendanceEvents(db, day.id) : [];
   const lastType = events.at(-1)?.type ?? "none";
 
   return {
@@ -257,48 +429,33 @@ export async function punchAttendance(
         })
         .returning();
     }
-    await transaction.insert(attendanceEvents).values({
-      attendanceDayId: day.id,
-      employeeId: context.employeeId,
-      occurredAt,
-      organizationId: actor.organizationId,
-      recordedByUserId: actor.userId,
-      source: "web",
-      type,
-    });
-    if (type === "clock_out") {
-      await transaction
-        .update(attendanceDays)
-        .set({ status: "complete", updatedAt: new Date() })
-        .where(eq(attendanceDays.id, day.id));
-      const completedEvents = [...state.events, { occurredAt, type }];
-      const breaks: Array<{ endedAt: Date; startedAt: Date }> = [];
-      let breakStart: Date | undefined;
-      for (const event of completedEvents) {
-        if (event.type === "break_start") breakStart = event.occurredAt;
-        if (event.type === "break_end" && breakStart) {
-          breaks.push({ endedAt: event.occurredAt, startedAt: breakStart });
-          breakStart = undefined;
-        }
-      }
-      const minutes = calculateDailyMinutes({
-        breaks,
-        clockInAt: completedEvents.find((event) => event.type === "clock_in")?.occurredAt,
-        clockOutAt: occurredAt,
-        scheduledMinutes: day.scheduledMinutes,
+    const [event] = await transaction
+      .insert(attendanceEvents)
+      .values({
+        attendanceDayId: day.id,
+        employeeId: context.employeeId,
+        occurredAt,
+        organizationId: actor.organizationId,
+        recordedByUserId: actor.userId,
+        source: "web",
+        type,
+      })
+      .returning({
+        correctionRequestId: attendanceEvents.correctionRequestId,
+        id: attendanceEvents.id,
+        occurredAt: attendanceEvents.occurredAt,
+        source: attendanceEvents.source,
+        type: attendanceEvents.type,
       });
-      await transaction
-        .insert(dailyAttendanceSummaries)
-        .values({ attendanceDayId: day.id, ...minutes, status: "complete" })
-        .onConflictDoUpdate({
-          target: dailyAttendanceSummaries.attendanceDayId,
-          set: { ...minutes, computedAt: new Date(), status: "complete" },
-        });
-    }
+    const events = [...state.events, event];
+    await recomputeAttendanceDay(transaction, day, events);
+    await transaction
+      .update(attendanceDays)
+      .set({ revision: sql`${attendanceDays.revision} + 1`, updatedAt: new Date() })
+      .where(eq(attendanceDays.id, day.id));
 
-    const updatedDay = type === "clock_out" ? { ...day, status: "complete" as const } : day;
     return {
-      ...(await stateForDay(transaction, updatedDay)),
+      ...(await stateForDay(transaction, day)),
       employeeId: context.employeeId,
       workDate: day.workDate,
     };

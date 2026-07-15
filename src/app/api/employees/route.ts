@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     requirePermission(actor, "employees:manage");
 
     if (["individualNumber", "bankAccount", "healthInformation"].some((key) => key in body)) {
-      throw new EmployeeManagementError("個人番号・銀行口座・健康情報はv0.1の保存対象外です。");
+      throw new EmployeeManagementError("個人番号・銀行口座・健康情報はv0.2の保存対象外です。");
     }
 
     const employee = await createEmployee(database, {

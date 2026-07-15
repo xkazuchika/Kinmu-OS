@@ -2,7 +2,7 @@ import type { AppDatabase } from "@/lib/db/client";
 import { auditLogs, type auditAction } from "@/lib/db/schema";
 
 export async function recordAudit(
-  db: AppDatabase,
+  db: Pick<AppDatabase, "insert">,
   input: Readonly<{
     action: (typeof auditAction.enumValues)[number];
     actorUserId?: string;

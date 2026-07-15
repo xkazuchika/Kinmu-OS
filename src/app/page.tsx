@@ -78,6 +78,14 @@ function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof manage
             時間
           </dd>
         </div>
+        <div>
+          <dt>未処理の勤怠申請</dt>
+          <dd>
+            <Link href="/attendance/corrections?status=pending">
+              {summary.pendingCorrections}件
+            </Link>
+          </dd>
+        </div>
       </dl>
       <section className="home-section">
         <h2>従業員別の残業</h2>

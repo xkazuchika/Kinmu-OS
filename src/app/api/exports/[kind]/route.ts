@@ -1,10 +1,11 @@
-import { and, asc, eq, gte, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 
 import { recordAudit } from "@/lib/audit";
 import { AuthorizationError, requireActor, requirePermission } from "@/lib/authorization";
 import { getDatabase } from "@/lib/db/client";
 import {
   attendanceDays,
+  attendanceEvents,
   dailyAttendanceSummaries,
   departments,
   employeeDepartments,
@@ -65,6 +66,12 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
         .select({
           displayName: employees.displayName,
           employeeNumber: employees.employeeNumber,
+          isCorrected: sql<boolean>`exists (
+            select 1 from ${attendanceEvents}
+            where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
+              and ${attendanceEvents.correctionRequestId} is not null
+              and ${attendanceEvents.supersededByCorrectionRequestId} is null
+          )`,
           overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
           scheduledMinutes: attendanceDays.scheduledMinutes,
           status: attendanceDays.status,
@@ -86,7 +93,7 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
         )
         .orderBy(asc(attendanceDays.workDate), asc(employees.employeeNumber));
       content = csv([
-        ["勤務日", "従業員番号", "表示名", "状態", "実労働分", "所定分", "残業分"],
+        ["勤務日", "従業員番号", "表示名", "状態", "実労働分", "所定分", "残業分", "修正済み"],
         ...rows.map((row) => [
           row.workDate,
           row.employeeNumber,
@@ -95,6 +102,7 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           row.workedMinutes,
           row.scheduledMinutes,
           row.overtimeMinutes,
+          row.isCorrected ? "はい" : "いいえ",
         ]),
       ]);
       parameters = { kind, month };

@@ -2,8 +2,10 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ClockIcon } from "@/components/icons";
+import { AttendanceCorrectionPanel } from "@/components/attendance-correction-panel";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { getMonthlyAttendance } from "@/lib/attendance";
+import { listOwnAttendanceCorrections } from "@/lib/attendance-corrections";
 import { sessionForToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { getDatabase } from "@/lib/db/client";
 
@@ -25,7 +27,10 @@ export default async function MyAttendancePage({
   const month = /^\d{4}-\d{2}$/.test(requestedMonth ?? "")
     ? requestedMonth!
     : new Date().toISOString().slice(0, 7);
-  const attendance = await getMonthlyAttendance(database, actor, month);
+  const [attendance, corrections] = await Promise.all([
+    getMonthlyAttendance(database, actor, month),
+    listOwnAttendanceCorrections(database, actor),
+  ]);
 
   return (
     <main className="employee-record-page">
@@ -53,41 +58,22 @@ export default async function MyAttendancePage({
           <dd>{hours(attendance.totals.overtimeMinutes)}</dd>
         </div>
       </dl>
-      <section className="home-section" aria-labelledby="daily-records-heading">
-        <h2 id="daily-records-heading">
-          <ClockIcon /> 日ごとの記録
-        </h2>
-        {attendance.days.length === 0 ? (
+      {attendance.days.length === 0 ? (
+        <section className="home-section" aria-labelledby="daily-records-heading">
+          <h2 id="daily-records-heading">
+            <ClockIcon /> 日ごとの記録
+          </h2>
           <EmptyState title="勤務実績はまだありません">
             出勤すると、その日の勤務時間がここに表示されます。
           </EmptyState>
-        ) : (
-          <div className="attendance-day-list">
-            {attendance.days.map((day) => (
-              <article key={day.id}>
-                <div>
-                  <strong>{day.workDate}</strong>
-                  <span>{day.status === "open" ? "未退勤" : "退勤済み"}</span>
-                </div>
-                <dl>
-                  <div>
-                    <dt>実労働</dt>
-                    <dd>{hours(day.workedMinutes)}</dd>
-                  </div>
-                  <div>
-                    <dt>所定</dt>
-                    <dd>{hours(day.scheduledMinutes)}</dd>
-                  </div>
-                  <div>
-                    <dt>残業</dt>
-                    <dd>{hours(day.overtimeMinutes)}</dd>
-                  </div>
-                </dl>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+        </section>
+      ) : (
+        <AttendanceCorrectionPanel
+          days={attendance.days}
+          initialHistory={corrections}
+          timezone={attendance.timezone}
+        />
+      )}
     </main>
   );
 }

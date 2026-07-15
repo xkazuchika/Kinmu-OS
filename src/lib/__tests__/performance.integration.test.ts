@@ -36,7 +36,7 @@ describeDatabase("100 employee performance smoke", () => {
     await client.close();
   });
 
-  it("queries a full month and exports CSV within the v0.1 smoke budget", async () => {
+  it("queries a full month and exports CSV within the small-team smoke budget", async () => {
     const [organization] = await client.db
       .insert(organizations)
       .values({ name: "100名性能検証" })

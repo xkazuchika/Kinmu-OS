@@ -69,7 +69,7 @@ export async function requireActor(db: AppDatabase, request: Request) {
 }
 
 export async function requireEmployeeScope(
-  db: AppDatabase,
+  db: Pick<AppDatabase, "select">,
   actor: SessionActor,
   employeeId: string,
 ) {

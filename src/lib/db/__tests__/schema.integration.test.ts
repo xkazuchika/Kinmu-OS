@@ -3,6 +3,8 @@ import { eq, sql } from "drizzle-orm";
 
 import { createDatabaseClient } from "@/lib/db/client";
 import {
+  attendanceCorrectionEntries,
+  attendanceCorrectionRequests,
   attendanceDays,
   attendanceEvents,
   auditLogs,
@@ -32,9 +34,11 @@ import {
 import { AuthorizationError, requireEmployeeScope, type SessionActor } from "@/lib/authorization";
 import {
   AttendanceError,
+  effectiveAttendanceEvents,
   getMonthlyAttendance,
   listManagedAttendance,
   punchAttendance,
+  recomputeAttendanceDay,
 } from "@/lib/attendance";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -58,7 +62,9 @@ describeDatabase("database organization boundaries", () => {
 
   beforeEach(async () => {
     await client.db.execute(sql`TRUNCATE TABLE audit_logs`);
+    await client.db.delete(attendanceCorrectionEntries);
     await client.db.delete(attendanceEvents);
+    await client.db.delete(attendanceCorrectionRequests);
     await client.db.delete(dailyAttendanceSummaries);
     await client.db.delete(attendanceDays);
     await client.db.delete(employeeDepartments);
@@ -107,6 +113,192 @@ describeDatabase("database organization boundaries", () => {
         startedOn: "2026-07-01",
       }),
       "same organization",
+    );
+  });
+
+  it("enforces attendance correction organization boundaries and one pending request", async () => {
+    const [firstOrganization, secondOrganization] = await client.db
+      .insert(organizations)
+      .values([{ name: "修正申請組織" }, { name: "別組織" }])
+      .returning();
+    const [requester, otherRequester] = await client.db
+      .insert(users)
+      .values([
+        {
+          displayName: "申請者",
+          email: "correction@example.com",
+          organizationId: firstOrganization.id,
+          role: "employee",
+          status: "active",
+        },
+        {
+          displayName: "別組織申請者",
+          email: "other-correction@example.com",
+          organizationId: secondOrganization.id,
+          role: "employee",
+          status: "active",
+        },
+      ])
+      .returning();
+    const [employee] = await client.db
+      .insert(employees)
+      .values({
+        employeeNumber: "COR-001",
+        familyName: "修正",
+        givenName: "申請",
+        organizationId: firstOrganization.id,
+        status: "active",
+        userId: requester.id,
+      })
+      .returning();
+    const [day] = await client.db
+      .insert(attendanceDays)
+      .values({
+        employeeId: employee.id,
+        organizationId: firstOrganization.id,
+        workDate: "2026-07-14",
+      })
+      .returning();
+
+    await expectDatabaseFailure(
+      client.db.insert(attendanceCorrectionRequests).values({
+        attendanceDayId: day.id,
+        employeeId: employee.id,
+        organizationId: firstOrganization.id,
+        reason: "退勤を修正します",
+        requestedByUserId: otherRequester.id,
+        workDate: day.workDate,
+      }),
+      "requester must belong to the same organization",
+    );
+
+    await client.db.insert(attendanceCorrectionRequests).values({
+      attendanceDayId: day.id,
+      employeeId: employee.id,
+      organizationId: firstOrganization.id,
+      reason: "退勤を修正します",
+      requestedByUserId: requester.id,
+      workDate: day.workDate,
+    });
+    await expectDatabaseFailure(
+      client.db.insert(attendanceCorrectionRequests).values({
+        attendanceDayId: day.id,
+        employeeId: employee.id,
+        organizationId: firstOrganization.id,
+        reason: "同じ日の重複申請",
+        requestedByUserId: requester.id,
+        workDate: day.workDate,
+      }),
+      "attendance_correction_requests_pending_unique",
+    );
+  });
+
+  it("rejects correction entries that reference another employee work date", async () => {
+    const [organization] = await client.db
+      .insert(organizations)
+      .values({ name: "明細境界組織" })
+      .returning();
+    const [requester] = await client.db
+      .insert(users)
+      .values({
+        displayName: "明細申請者",
+        email: "entry@example.com",
+        organizationId: organization.id,
+        role: "employee",
+        status: "active",
+      })
+      .returning();
+    const [employee, otherEmployee] = await client.db
+      .insert(employees)
+      .values([
+        {
+          employeeNumber: "ENTRY-001",
+          familyName: "明細",
+          givenName: "本人",
+          organizationId: organization.id,
+          status: "active",
+          userId: requester.id,
+        },
+        {
+          employeeNumber: "ENTRY-002",
+          familyName: "明細",
+          givenName: "他人",
+          organizationId: organization.id,
+          status: "active",
+        },
+      ])
+      .returning();
+    const [day, otherDay] = await client.db
+      .insert(attendanceDays)
+      .values([
+        {
+          employeeId: employee.id,
+          organizationId: organization.id,
+          workDate: "2026-07-14",
+        },
+        {
+          employeeId: otherEmployee.id,
+          organizationId: organization.id,
+          workDate: "2026-07-14",
+        },
+      ])
+      .returning();
+    const [otherEvent] = await client.db
+      .insert(attendanceEvents)
+      .values({
+        attendanceDayId: otherDay.id,
+        employeeId: otherEmployee.id,
+        occurredAt: new Date("2026-07-14T00:00:00.000Z"),
+        organizationId: organization.id,
+        type: "clock_in",
+      })
+      .returning();
+    const [request] = await client.db
+      .insert(attendanceCorrectionRequests)
+      .values({
+        attendanceDayId: day.id,
+        employeeId: employee.id,
+        organizationId: organization.id,
+        reason: "時刻を修正します",
+        requestedByUserId: requester.id,
+        workDate: day.workDate,
+      })
+      .returning();
+
+    await expectDatabaseFailure(
+      client.db.insert(attendanceCorrectionEntries).values({
+        kind: "original",
+        occurredAt: otherEvent.occurredAt,
+        originalEventId: otherEvent.id,
+        position: 0,
+        requestId: request.id,
+        type: otherEvent.type,
+      }),
+      "same employee work date",
+    );
+  });
+
+  it("creates partial and composite indexes for correction workflows", async () => {
+    const result = (await client.db.execute(sql`
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname IN (
+          'attendance_correction_requests_pending_unique',
+          'attendance_corrections_org_status_created_idx',
+          'attendance_events_active_day_time_index'
+        )
+    `)) as unknown as Array<{ indexdef: string; indexname: string }>;
+    const indexes = new Map(result.map((row) => [row.indexname, row.indexdef]));
+
+    expect(indexes.get("attendance_correction_requests_pending_unique")).toContain(
+      "WHERE (status = 'pending'",
+    );
+    expect(indexes.get("attendance_corrections_org_status_created_idx")).toContain(
+      "organization_id, status, created_at",
+    );
+    expect(indexes.get("attendance_events_active_day_time_index")).toContain(
+      "superseded_by_correction_request_id IS NULL",
     );
   });
 
@@ -500,6 +692,10 @@ describeDatabase("database organization boundaries", () => {
       .from(attendanceEvents)
       .where(eq(attendanceEvents.employeeId, employee.id));
     const [summary] = await client.db.select().from(dailyAttendanceSummaries);
+    const [storedDay] = await client.db
+      .select()
+      .from(attendanceDays)
+      .where(eq(attendanceDays.employeeId, employee.id));
     const monthly = await getMonthlyAttendance(client.db, actor, "2026-07");
     const managed = await listManagedAttendance(client.db, {
       month: "2026-07",
@@ -509,6 +705,7 @@ describeDatabase("database organization boundaries", () => {
     expect(finalState).toMatchObject({ actions: [], state: "clock_out", workDate: "2026-07-15" });
     expect(storedEvents).toHaveLength(4);
     expect(storedEvents.every((event) => event.recordedByUserId === user.id)).toBe(true);
+    expect(storedDay.revision).toBe(4);
     expect(summary).toMatchObject({
       breakMinutes: 60,
       overtimeMinutes: 60,
@@ -520,6 +717,58 @@ describeDatabase("database organization boundaries", () => {
       scheduledMinutes: 480,
       workedMinutes: 540,
     });
+    expect(monthly.days[0]?.isCorrected).toBe(false);
     expect(managed).toHaveLength(1);
+    expect(managed[0]?.isCorrected).toBe(false);
+
+    const [correction] = await client.db
+      .insert(attendanceCorrectionRequests)
+      .values({
+        attendanceDayId: storedDay.id,
+        baseRevision: storedDay.revision,
+        employeeId: employee.id,
+        organizationId: organization.id,
+        reason: "出勤時刻を修正",
+        requestedByUserId: user.id,
+        status: "approved",
+        workDate: storedDay.workDate,
+      })
+      .returning();
+    const originalClockIn = storedEvents.find((event) => event.type === "clock_in")!;
+    await client.db
+      .update(attendanceEvents)
+      .set({ supersededByCorrectionRequestId: correction.id })
+      .where(eq(attendanceEvents.id, originalClockIn.id));
+    await client.db.insert(attendanceEvents).values({
+      attendanceDayId: storedDay.id,
+      correctionRequestId: correction.id,
+      employeeId: employee.id,
+      occurredAt: originalClockIn.occurredAt,
+      organizationId: organization.id,
+      recordedByUserId: user.id,
+      source: "correction",
+      type: "clock_in",
+    });
+
+    const effectiveEvents = await effectiveAttendanceEvents(client.db, storedDay.id);
+    expect(effectiveEvents).toHaveLength(4);
+    expect(effectiveEvents.some((event) => event.id === originalClockIn.id)).toBe(false);
+    expect(effectiveEvents.some((event) => event.correctionRequestId === correction.id)).toBe(true);
+
+    await recomputeAttendanceDay(
+      client.db,
+      storedDay,
+      effectiveEvents.filter((event) => event.type !== "clock_out"),
+    );
+    const [reopenedDay] = await client.db
+      .select()
+      .from(attendanceDays)
+      .where(eq(attendanceDays.id, storedDay.id));
+    const summariesAfterReopen = await client.db
+      .select()
+      .from(dailyAttendanceSummaries)
+      .where(eq(dailyAttendanceSummaries.attendanceDayId, storedDay.id));
+    expect(reopenedDay.status).toBe("open");
+    expect(summariesAfterReopen).toHaveLength(0);
   });
 });

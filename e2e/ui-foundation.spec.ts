@@ -294,6 +294,26 @@ test("employee home and records work at 320 CSS pixels", async ({ page }) => {
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await expect(page.getByRole("heading", { level: 1, name: "勤務実績" })).toBeVisible();
   await expect(page.getByLabel("表示する月")).toBeVisible();
+  const attendanceDay = page.locator(".attendance-day-list article").first();
+  const workDate = (await attendanceDay.locator("strong").first().textContent())!.trim();
+  await attendanceDay.getByRole("button", { name: "修正を申請" }).click();
+  await page.getByLabel("1件目の時刻").fill(`${workDate}T09:00`);
+  await page.getByLabel("修正理由").fill("出勤時刻を入力し直すため");
+  await expect(page.getByText("変更", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-correction-mobile-edit.png" });
+  await page.getByRole("button", { name: "この内容で申請" }).click();
+  await expect(page.getByText("勤怠修正を申請しました。")).toBeVisible();
+  await page.getByRole("button", { name: "申請を取り消す" }).click();
+  await expect(page.getByText("申請を取り消しました。")).toBeVisible();
+
+  await attendanceDay.getByRole("button", { name: "修正を申請" }).click();
+  await page.getByLabel("1件目の時刻").fill(`${workDate}T09:00`);
+  await page.getByLabel("修正理由").fill("管理者確認用の出勤時刻修正");
+  await page.getByRole("button", { name: "この内容で申請" }).click();
+  await expect(page.getByText("審査待ち", { exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -310,15 +330,41 @@ test("employee home and records work at 320 CSS pixels", async ({ page }) => {
   expect(consoleProblems.filter((problem) => !problem.includes("status of 422"))).toEqual([]);
 });
 
-test("HR can review registry, overtime columns, CSV import preview, and exports", async ({
-  page,
-}) => {
+test("HR reviews and approves an attendance correction", async ({ page }) => {
+  const consoleProblems = collectConsoleProblems(page);
+  await page.setViewportSize({ height: 900, width: 1440 });
   await login(page, hrAdmin.email, hrAdmin.password);
+  await page.goto("/attendance/corrections?status=pending");
+
+  await expect(page).toHaveTitle("Kinmu-OS");
+  await expect(page.getByRole("heading", { level: 1, name: "勤怠申請" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "勤怠申請" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await page
+    .getByRole("button", { name: /従業員 花子/ })
+    .first()
+    .click();
+  await expect(page.getByText("管理者確認用の出勤時刻修正")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: "修正前" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: "申請後" })).toBeVisible();
+  await expect(page.getByText("変更", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "却下する" })).toBeDisabled();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-correction-review-desktop.png" });
+
+  await page.getByRole("button", { name: "承認する" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "勤怠修正を承認しますか？" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "承認して反映" }).click();
+  await expect(page.getByText("勤怠修正を承認し、集計へ反映しました。")).toBeVisible();
+  await expect(
+    page.locator(".status-pill").getByText("承認済み", { exact: true }).first(),
+  ).toBeVisible();
+
   await page.goto("/employees");
-  await expect(page.getByRole("heading", { level: 1, name: "従業員" })).toBeVisible();
   await page.getByRole("button", { name: "一覧を読み込む" }).click();
   await expect(page.getByText(employee.employeeNumber)).toBeVisible();
-
   const preview = await page.request.post("/api/imports/employees", {
     data: {
       csv: [
@@ -330,12 +376,6 @@ test("HR can review registry, overtime columns, CSV import preview, and exports"
   });
   expect(preview.ok()).toBe(true);
   expect(((await preview.json()) as { errors: unknown[] }).errors).toEqual([]);
-
-  await page.goto("/attendance");
-  await expect(page.getByRole("heading", { level: 1, name: "勤怠一覧" })).toBeVisible();
-  await page.getByRole("button", { name: "今月を読み込む" }).click();
-  await expect(page.getByText("残業", { exact: true })).toBeVisible();
-
   const employeeCsv = await page.request.get("/api/exports/employees");
   expect(employeeCsv.ok()).toBe(true);
   expect(await employeeCsv.text()).toContain(employee.employeeNumber);
@@ -343,5 +383,13 @@ test("HR can review registry, overtime columns, CSV import preview, and exports"
     `/api/exports/attendance?month=${new Date().toISOString().slice(0, 7)}`,
   );
   expect(attendanceCsv.ok()).toBe(true);
-  expect(await attendanceCsv.text()).toContain("残業分");
+  expect(await attendanceCsv.text()).toContain("修正済み");
+
+  await login(page, employee.email, employee.password);
+  await page.goto("/attendance/me");
+  await expect(page.getByText("修正済み", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.locator(".status-pill").getByText("承認済み", { exact: true }).first(),
+  ).toBeVisible();
+  expect(consoleProblems).toEqual([]);
 });

@@ -20,6 +20,7 @@ const managementItems = [
   { href: "/", icon: HomeIcon, label: "ホーム" },
   { href: "/employees", icon: PeopleIcon, label: "従業員" },
   { href: "/attendance", icon: ClockIcon, label: "勤怠" },
+  { href: "/attendance/corrections", icon: ReportIcon, label: "勤怠申請" },
   { href: "/reports", icon: ReportIcon, label: "レポート" },
   { href: "/settings/users", icon: UserIcon, label: "利用者管理" },
   { href: "/audit", icon: ShieldIcon, label: "監査ログ" },
@@ -36,6 +37,9 @@ const employeeItems = [
 type ShellActor = Pick<SessionActor, "displayName" | "role">;
 
 function isCurrentPath(pathname: string, href: string) {
+  if (href === "/attendance") {
+    return pathname === href || pathname.startsWith("/attendance/rules");
+  }
   return href === "/" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 }
 

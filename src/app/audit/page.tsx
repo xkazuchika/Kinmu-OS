@@ -33,6 +33,11 @@ const actions = [
   "employee_status_changed",
   "work_rule_changed",
   "attendance_punched",
+  "attendance_correction_requested",
+  "attendance_correction_cancelled",
+  "attendance_correction_approved",
+  "attendance_correction_rejected",
+  "attendance_correction_applied",
   "csv_imported",
   "csv_exported",
 ];

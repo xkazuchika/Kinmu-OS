@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gte, lt, ne, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "@/lib/db/client";
+import { countPendingAttendanceCorrections } from "@/lib/attendance-corrections";
 import { attendanceDays, auditLogs, dailyAttendanceSummaries, employees } from "@/lib/db/schema";
 
 function rangeForMonth(month: string) {
@@ -14,7 +15,7 @@ function rangeForMonth(month: string) {
 
 export async function managementDashboard(db: AppDatabase, organizationId: string, month: string) {
   const range = rangeForMonth(month);
-  const [[headcount], [openDays], overtime] = await Promise.all([
+  const [[headcount], [openDays], overtime, pendingCorrections] = await Promise.all([
     db
       .select({ value: count() })
       .from(employees)
@@ -46,8 +47,14 @@ export async function managementDashboard(db: AppDatabase, organizationId: strin
       )
       .groupBy(employees.id, employees.displayName)
       .orderBy(desc(sql`sum(${dailyAttendanceSummaries.overtimeMinutes})`)),
+    countPendingAttendanceCorrections(db, organizationId),
   ]);
-  return { activeEmployees: headcount.value, openDays: openDays.value, overtime };
+  return {
+    activeEmployees: headcount.value,
+    openDays: openDays.value,
+    overtime,
+    pendingCorrections,
+  };
 }
 
 export function escapeCsv(value: unknown) {

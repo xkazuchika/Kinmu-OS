@@ -1,0 +1,1 @@
+ALTER TABLE "attendance_correction_entries" ADD CONSTRAINT "attendance_correction_entries_original_reference_required" CHECK ("attendance_correction_entries"."kind" <> 'original' OR "attendance_correction_entries"."original_event_id" IS NOT NULL);
