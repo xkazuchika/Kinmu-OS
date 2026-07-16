@@ -27,6 +27,7 @@ import {
 import { findEffectiveWorkRule } from "@/lib/db/work-rules";
 import { assertEmployeeCanPunch } from "@/lib/employees";
 import { workDateFor, type WorkDate } from "@/lib/time";
+import { assertAttendanceMonthOpen, lockAttendanceMonth } from "@/lib/attendance-closing";
 
 type CorrectionStatus = (typeof attendanceCorrectionRequests.$inferSelect)["status"];
 
@@ -141,6 +142,8 @@ export async function createAttendanceCorrection(
   const requestedEntries = parseRequestedEntries(input.entries, workDate, context.timezone);
 
   return db.transaction(async (transaction) => {
+    await lockAttendanceMonth(transaction, actor.organizationId, workDate.slice(0, 7));
+    await assertAttendanceMonthOpen(transaction, actor.organizationId, workDate);
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext(${`${context.employeeId}:${workDate}`}))`,
     );
@@ -284,6 +287,8 @@ export async function cancelAttendanceCorrection(
       )
       .limit(1);
     if (!request) throw new AuthorizationError();
+    await lockAttendanceMonth(transaction, actor.organizationId, request.workDate.slice(0, 7));
+    await assertAttendanceMonthOpen(transaction, actor.organizationId, request.workDate);
     await requireEmployeeScope(transaction, actor, request.employeeId);
     if (request.status !== "pending") {
       throw new AttendanceCorrectionConflictError("審査済みの申請は取り消せません。");
@@ -480,6 +485,12 @@ export async function reviewAttendanceCorrection(
   }
   return db.transaction(async (transaction) => {
     let detail = await correctionDetail(transaction, requestId, actor.organizationId);
+    await lockAttendanceMonth(
+      transaction,
+      actor.organizationId,
+      detail.request.workDate.slice(0, 7),
+    );
+    await assertAttendanceMonthOpen(transaction, actor.organizationId, detail.request.workDate);
     if (detail.request.requestedByUserId === actor.userId) {
       throw new AuthorizationError("自分の申請は審査できません。");
     }

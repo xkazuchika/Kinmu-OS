@@ -159,6 +159,7 @@ export function Toast({
 
 export function ConfirmDialog({
   children,
+  confirmDisabled = false,
   confirmLabel,
   onCancel,
   onConfirm,
@@ -166,6 +167,7 @@ export function ConfirmDialog({
   title,
 }: {
   children: ReactNode;
+  confirmDisabled?: boolean;
   confirmLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
@@ -173,6 +175,11 @@ export function ConfirmDialog({
   title: string;
 }) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const onCancelRef = useRef(onCancel);
+
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
 
   useEffect(() => {
     if (!open) {
@@ -182,7 +189,7 @@ export function ConfirmDialog({
     cancelButtonRef.current?.focus();
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onCancel();
+        onCancelRef.current();
         return;
       }
 
@@ -190,7 +197,7 @@ export function ConfirmDialog({
         const dialog = cancelButtonRef.current?.closest('[role="alertdialog"]');
         const controls = Array.from(
           dialog?.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
           ) ?? [],
         );
         const first = controls.at(0);
@@ -208,7 +215,7 @@ export function ConfirmDialog({
     document.addEventListener("keydown", closeOnEscape);
 
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [onCancel, open]);
+  }, [open]);
 
   if (!open) {
     return null;
@@ -223,12 +230,12 @@ export function ConfirmDialog({
         role="alertdialog"
       >
         <h2 id="confirmation-title">{title}</h2>
-        <p>{children}</p>
+        <div className="ui-dialog__body">{children}</div>
         <div className="ui-dialog__actions">
           <Button ref={cancelButtonRef} onClick={onCancel} type="button" variant="secondary">
             キャンセル
           </Button>
-          <Button onClick={onConfirm} type="button" variant="danger">
+          <Button disabled={confirmDisabled} onClick={onConfirm} type="button" variant="danger">
             {confirmLabel}
           </Button>
         </div>

@@ -14,7 +14,7 @@ export type GuideEntry = Readonly<{
   title: string;
 }>;
 
-export const GUIDE_VERSION = "0.2.0";
+export const GUIDE_VERSION = "0.3.0";
 export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
@@ -51,11 +51,19 @@ export const guideCatalog = [
     file: "attendance-corrections.md",
   },
   {
+    slug: "monthly-closing",
+    title: "月次勤怠の締め・再開",
+    description: "締め前検査、月次締め、確定CSV、理由付き再開と再締めを行います。",
+    roles: ["owner", "hr_admin"],
+    order: 50,
+    file: "monthly-closing.md",
+  },
+  {
     slug: "reports-and-audit",
     title: "レポート・CSV・監査ログ",
     description: "勤怠と残業の集計、CSV出力、操作履歴を確認します。",
     roles: ["owner", "hr_admin"],
-    order: 50,
+    order: 60,
     file: "reports-and-audit.md",
   },
   {
@@ -63,7 +71,7 @@ export const guideCatalog = [
     title: "トラブル対処",
     description: "ログイン、権限、打刻、申請、CSV、セルフホスト環境を切り分けます。",
     roles: ["owner", "hr_admin", "employee"],
-    order: 60,
+    order: 70,
     file: "troubleshooting.md",
   },
 ] as const satisfies readonly GuideEntry[];
@@ -108,6 +116,7 @@ export function guidesForRole(role: GuideRole) {
     hr_admin: [
       "admin-setup",
       "attendance-corrections",
+      "monthly-closing",
       "reports-and-audit",
       "overview",
       "troubleshooting",
@@ -115,6 +124,7 @@ export function guidesForRole(role: GuideRole) {
     owner: [
       "admin-setup",
       "attendance-corrections",
+      "monthly-closing",
       "reports-and-audit",
       "overview",
       "troubleshooting",

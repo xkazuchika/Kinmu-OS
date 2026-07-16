@@ -35,7 +35,7 @@ describe("user guide catalog", () => {
       guidesForRole("hr_admin")
         .slice(0, 3)
         .map((guide) => guide.slug),
-    ).toEqual(["admin-setup", "attendance-corrections", "reports-and-audit"]);
+    ).toEqual(["admin-setup", "attendance-corrections", "monthly-closing"]);
   });
 
   it("keeps every catalog file, version, heading and internal link consistent", async () => {

@@ -555,8 +555,14 @@ textarea {
 }
 
 .ui-dialog h2,
-.ui-dialog p {
+.ui-dialog p,
+.ui-dialog__body {
   margin: 0;
+}
+
+.ui-dialog__body {
+  display: grid;
+  gap: var(--space-3);
 }
 
 .ui-dialog__actions {
@@ -2137,6 +2143,67 @@ textarea {
   align-self: end;
 }
 
+.attendance-closing {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-accent) 9%, transparent),
+      transparent 55%
+    ),
+    var(--color-surface);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-5);
+}
+
+.attendance-closing__heading {
+  align-items: center;
+  display: flex;
+  gap: var(--space-4);
+  justify-content: space-between;
+}
+
+.attendance-closing__heading p,
+.attendance-closing > p {
+  margin: 0;
+}
+
+.attendance-closing__label {
+  color: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.attendance-closing__summary {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+  overflow: hidden;
+}
+
+.attendance-closing__summary div {
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  border-left: 2px solid var(--color-border);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+}
+
+.attendance-closing__summary dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.attendance-closing__summary dd {
+  font-size: var(--font-size-lg);
+  font-weight: 800;
+  margin: 0;
+}
+
 .import-errors {
   color: var(--color-danger);
   margin: 0;
@@ -2150,6 +2217,10 @@ textarea {
 
   .registry-create {
     padding: var(--space-4);
+  }
+
+  .attendance-closing__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .dashboard-summary {
@@ -2173,6 +2244,15 @@ textarea {
 }
 
 @media (max-width: 30rem) {
+  .attendance-closing__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .attendance-closing__heading .ui-button {
+    width: 100%;
+  }
+
   .attendance-day-list .attendance-day-heading,
   .attendance-day-list article > div,
   .attendance-day-list dl {

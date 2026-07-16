@@ -1,0 +1,2 @@
+ALTER TABLE "attendance_month_day_snapshots" ADD COLUMN "department_id" uuid;--> statement-breakpoint
+ALTER TABLE "attendance_month_day_snapshots" ADD CONSTRAINT "attendance_month_day_snapshots_department_id_departments_id_fk" FOREIGN KEY ("department_id") REFERENCES "public"."departments"("id") ON DELETE restrict ON UPDATE no action;

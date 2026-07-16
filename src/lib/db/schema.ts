@@ -45,6 +45,7 @@ export const attendanceCorrectionEntryKind = pgEnum("attendance_correction_entry
   "original",
   "requested",
 ]);
+export const attendanceMonthStatus = pgEnum("attendance_month_status", ["open", "closed"]);
 export const auditAction = pgEnum("audit_action", [
   "setup_completed",
   "login_succeeded",
@@ -65,6 +66,9 @@ export const auditAction = pgEnum("audit_action", [
   "attendance_correction_approved",
   "attendance_correction_rejected",
   "attendance_correction_applied",
+  "attendance_month_closed",
+  "attendance_month_reopened",
+  "attendance_month_reclosed",
   "csv_imported",
   "csv_exported",
 ]);
@@ -425,6 +429,126 @@ export const dailyAttendanceSummaries = pgTable(
     computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("daily_attendance_summaries_day_unique").on(table.attendanceDayId)],
+);
+
+export const attendanceMonthPeriods = pgTable(
+  "attendance_month_periods",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    targetMonth: text("target_month").notNull(),
+    status: attendanceMonthStatus("status").notNull().default("open"),
+    currentRevision: integer("current_revision"),
+    nextRevision: integer("next_revision").notNull().default(1),
+    version: integer("version").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("attendance_month_periods_month_format", sql`${table.targetMonth} ~ '^\\d{4}-\\d{2}$'`),
+    check("attendance_month_periods_next_revision_positive", sql`${table.nextRevision} > 0`),
+    check("attendance_month_periods_version_nonnegative", sql`${table.version} >= 0`),
+    uniqueIndex("attendance_month_periods_org_month_unique").on(
+      table.organizationId,
+      table.targetMonth,
+    ),
+  ],
+);
+
+export const attendanceMonthRevisions = pgTable(
+  "attendance_month_revisions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    periodId: uuid("period_id")
+      .notNull()
+      .references(() => attendanceMonthPeriods.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    targetMonth: text("target_month").notNull(),
+    revision: integer("revision").notNull(),
+    closedByUserId: uuid("closed_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    closedAt: timestamp("closed_at", { withTimezone: true }).notNull().defaultNow(),
+    reopenedByUserId: uuid("reopened_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    reopenedAt: timestamp("reopened_at", { withTimezone: true }),
+    reopenReason: text("reopen_reason"),
+    employeeCount: integer("employee_count").notNull().default(0),
+    dayCount: integer("day_count").notNull().default(0),
+    scheduledMinutes: integer("scheduled_minutes").notNull().default(0),
+    workedMinutes: integer("worked_minutes").notNull().default(0),
+    overtimeMinutes: integer("overtime_minutes").notNull().default(0),
+  },
+  (table) => [
+    check("attendance_month_revisions_revision_positive", sql`${table.revision} > 0`),
+    check(
+      "attendance_month_revisions_reopen_complete",
+      sql`(${table.reopenedAt} IS NULL AND ${table.reopenedByUserId} IS NULL AND ${table.reopenReason} IS NULL) OR (${table.reopenedAt} IS NOT NULL AND ${table.reopenedByUserId} IS NOT NULL AND length(trim(${table.reopenReason})) > 0)`,
+    ),
+    uniqueIndex("attendance_month_revisions_period_revision_unique").on(
+      table.periodId,
+      table.revision,
+    ),
+    uniqueIndex("attendance_month_revisions_one_active_unique")
+      .on(table.periodId)
+      .where(sql`${table.reopenedAt} IS NULL`),
+    index("attendance_month_revisions_org_month_index").on(
+      table.organizationId,
+      table.targetMonth,
+      table.revision,
+    ),
+  ],
+);
+
+export const attendanceMonthDaySnapshots = pgTable(
+  "attendance_month_day_snapshots",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    revisionId: uuid("revision_id")
+      .notNull()
+      .references(() => attendanceMonthRevisions.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    attendanceDayId: uuid("attendance_day_id").references(() => attendanceDays.id, {
+      onDelete: "restrict",
+    }),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "restrict" }),
+    employeeNumber: text("employee_number").notNull(),
+    displayName: text("display_name").notNull(),
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "restrict" }),
+    departmentCode: text("department_code"),
+    departmentName: text("department_name"),
+    workDate: date("work_date").notNull(),
+    status: attendanceDayStatus("status").notNull(),
+    scheduledMinutes: integer("scheduled_minutes").notNull().default(0),
+    workedMinutes: integer("worked_minutes"),
+    breakMinutes: integer("break_minutes"),
+    overtimeMinutes: integer("overtime_minutes"),
+    workRuleId: uuid("work_rule_id").references(() => workRules.id, { onDelete: "restrict" }),
+    workRuleName: text("work_rule_name"),
+    isCorrected: boolean("is_corrected").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("attendance_month_snapshots_revision_employee_date_unique").on(
+      table.revisionId,
+      table.employeeId,
+      table.workDate,
+    ),
+    index("attendance_month_snapshots_org_date_index").on(table.organizationId, table.workDate),
+    index("attendance_month_snapshots_revision_employee_index").on(
+      table.revisionId,
+      table.employeeId,
+    ),
+  ],
 );
 
 export const auditLogs = pgTable(

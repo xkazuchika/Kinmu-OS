@@ -1,5 +1,6 @@
 import { recordAudit } from "@/lib/audit";
 import { AttendanceError, getAttendanceState, punchAttendance } from "@/lib/attendance";
+import { AttendanceClosingConflictError } from "@/lib/attendance-closing";
 import { AuthorizationError, requireActor, requirePermission } from "@/lib/authorization";
 import { getDatabase } from "@/lib/db/client";
 import { EmployeeManagementError } from "@/lib/employees";
@@ -13,6 +14,8 @@ export async function GET(request: Request) {
   } catch (error) {
     if (error instanceof AuthorizationError)
       return Response.json({ error: error.message }, { status: 403 });
+    if (error instanceof AttendanceClosingConflictError)
+      return Response.json({ error: error.message }, { status: 409 });
     if (error instanceof AttendanceError || error instanceof EmployeeManagementError)
       return Response.json({ error: error.message }, { status: 422 });
     console.error("Could not get attendance state.", error);

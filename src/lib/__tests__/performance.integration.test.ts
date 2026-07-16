@@ -5,6 +5,8 @@ import { sql } from "drizzle-orm";
 
 import { GET as exportGet } from "@/app/api/exports/[kind]/route";
 import { listManagedAttendance } from "@/lib/attendance";
+import { closeAttendanceMonth } from "@/lib/attendance-closing";
+import type { SessionActor } from "@/lib/authorization";
 import { createSession, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { closeDatabase, createDatabaseClient } from "@/lib/db/client";
 import {
@@ -86,7 +88,7 @@ describeDatabase("100 employee performance smoke", () => {
             organizationId: organization.id,
             scheduledMinutes: 480,
             status: "complete" as const,
-            workDate: `2026-07-${String(day + 1).padStart(2, "0")}`,
+            workDate: `2026-05-${String(day + 1).padStart(2, "0")}`,
           })),
         ),
       )
@@ -104,19 +106,40 @@ describeDatabase("100 employee performance smoke", () => {
 
     const attendanceStarted = performance.now();
     const attendance = await listManagedAttendance(client.db, {
-      month: "2026-07",
+      month: "2026-05",
       organizationId: organization.id,
     });
     const attendanceMs = performance.now() - attendanceStarted;
 
     const dashboardStarted = performance.now();
-    const dashboard = await managementDashboard(client.db, organization.id, "2026-07");
+    const dashboard = await managementDashboard(client.db, organization.id, "2026-05");
     const dashboardMs = performance.now() - dashboardStarted;
+
+    const ownerActor: SessionActor = {
+      displayName: owner.displayName,
+      expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+      organizationId: organization.id,
+      role: "owner",
+      userId: owner.id,
+    };
+    const closingStarted = performance.now();
+    await closeAttendanceMonth(client.db, ownerActor, {
+      expectedVersion: 0,
+      month: "2026-05",
+    });
+    const closingMs = performance.now() - closingStarted;
+
+    const closedListStarted = performance.now();
+    const closedAttendance = await listManagedAttendance(client.db, {
+      month: "2026-05",
+      organizationId: organization.id,
+    });
+    const closedListMs = performance.now() - closedListStarted;
 
     const session = await createSession(client.db, owner.id);
     const exportStarted = performance.now();
     const exported = await exportGet(
-      new Request("http://kinmu.test/api/exports/attendance?month=2026-07", {
+      new Request("http://kinmu.test/api/exports/attendance?month=2026-05", {
         headers: { cookie: `${SESSION_COOKIE_NAME}=${session.token}` },
       }),
       { params: Promise.resolve({ kind: "attendance" }) },
@@ -125,9 +148,10 @@ describeDatabase("100 employee performance smoke", () => {
     const csv = await exported.text();
 
     console.info(
-      `Performance smoke: attendance=${attendanceMs.toFixed(1)}ms dashboard=${dashboardMs.toFixed(1)}ms csv=${exportMs.toFixed(1)}ms`,
+      `Performance smoke: attendance=${attendanceMs.toFixed(1)}ms dashboard=${dashboardMs.toFixed(1)}ms closing=${closingMs.toFixed(1)}ms closed-list=${closedListMs.toFixed(1)}ms csv=${exportMs.toFixed(1)}ms`,
     );
     expect(attendance).toHaveLength(3_100);
+    expect(closedAttendance).toHaveLength(3_100);
     expect(dashboard.activeEmployees).toBe(100);
     expect(dashboard.overtime).toHaveLength(100);
     expect(exported.status).toBe(200);
@@ -135,5 +159,7 @@ describeDatabase("100 employee performance smoke", () => {
     expect(attendanceMs).toBeLessThan(3_000);
     expect(dashboardMs).toBeLessThan(3_000);
     expect(exportMs).toBeLessThan(3_000);
+    expect(closingMs).toBeLessThan(3_000);
+    expect(closedListMs).toBeLessThan(3_000);
   }, 20_000);
 });

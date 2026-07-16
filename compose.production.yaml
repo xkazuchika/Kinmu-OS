@@ -32,7 +32,7 @@ services:
       target: runner
     environment:
       APP_URL: ${APP_URL:?APP_URL is required}
-      APP_VERSION: ${APP_VERSION:-0.2.0}
+      APP_VERSION: ${APP_VERSION:-0.3.0}
       DATABASE_URL: postgresql://${POSTGRES_USER:-kinmu}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kinmu}
       NODE_ENV: production
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}

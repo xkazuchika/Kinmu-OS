@@ -100,10 +100,12 @@ function requestedEntries(day: CorrectionDay, timezone: string): EditableEntry[]
 }
 
 export function AttendanceCorrectionPanel({
+  closed = false,
   days,
   initialHistory,
   timezone,
 }: {
+  closed?: boolean;
   days: CorrectionDay[];
   initialHistory: HistoryItem[];
   timezone: string;
@@ -242,12 +244,16 @@ export function AttendanceCorrectionPanel({
                   ) : null}
                 </div>
                 <Button
-                  disabled={day.correction?.status === "pending"}
+                  disabled={closed || day.correction?.status === "pending"}
                   onClick={() => begin(day)}
                   type="button"
                   variant="secondary"
                 >
-                  {day.correction?.status === "pending" ? "審査待ち" : "修正を申請"}
+                  {closed
+                    ? "締め済み"
+                    : day.correction?.status === "pending"
+                      ? "審査待ち"
+                      : "修正を申請"}
                 </Button>
               </div>
               <ol className="attendance-event-list" aria-label={`${day.workDate}の有効打刻`}>

@@ -38,6 +38,9 @@ const actions = [
   "attendance_correction_approved",
   "attendance_correction_rejected",
   "attendance_correction_applied",
+  "attendance_month_closed",
+  "attendance_month_reopened",
+  "attendance_month_reclosed",
   "csv_imported",
   "csv_exported",
 ];

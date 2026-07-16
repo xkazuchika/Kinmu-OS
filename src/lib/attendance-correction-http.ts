@@ -2,6 +2,7 @@ import {
   AttendanceCorrectionConflictError,
   AttendanceCorrectionValidationError,
 } from "@/lib/attendance-corrections";
+import { AttendanceClosingConflictError } from "@/lib/attendance-closing";
 import { AuthorizationError } from "@/lib/authorization";
 
 export function attendanceCorrectionErrorResponse(error: unknown, fallback: string) {
@@ -11,7 +12,10 @@ export function attendanceCorrectionErrorResponse(error: unknown, fallback: stri
   if (error instanceof AttendanceCorrectionValidationError) {
     return Response.json({ error: error.message }, { status: 422 });
   }
-  if (error instanceof AttendanceCorrectionConflictError) {
+  if (
+    error instanceof AttendanceCorrectionConflictError ||
+    error instanceof AttendanceClosingConflictError
+  ) {
     return Response.json({ error: error.message }, { status: 409 });
   }
   console.error(fallback, error);

@@ -44,6 +44,12 @@ export default async function MyAttendancePage({
           表示
         </button>
       </form>
+      {attendance.closure.status === "closed" ? (
+        <div className="ui-toast ui-toast--info" role="status">
+          この月は締め済みです（リビジョン {attendance.closure.currentRevision}
+          ）。修正には管理者による再開が必要です。
+        </div>
+      ) : null}
       <dl className="work-summary work-summary--prominent">
         <div>
           <dt>実労働</dt>
@@ -69,6 +75,7 @@ export default async function MyAttendancePage({
         </section>
       ) : (
         <AttendanceCorrectionPanel
+          closed={attendance.closure.status === "closed"}
           days={attendance.days}
           initialHistory={corrections}
           timezone={attendance.timezone}

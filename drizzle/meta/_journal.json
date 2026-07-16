@@ -71,6 +71,20 @@
       "when": 1784121683884,
       "tag": "0009_pink_daimon_hellstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784204513641,
+      "tag": "0010_flaky_calypso",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784204669894,
+      "tag": "0011_lethal_earthquake",
+      "breakpoints": true
     }
   ]
 }

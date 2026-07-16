@@ -16,6 +16,12 @@ import {
 import { assertEmployeeCanPunch } from "@/lib/employees";
 import { findEffectiveWorkRule } from "@/lib/db/work-rules";
 import { calculateDailyMinutes, workDateFor, type WorkDate } from "@/lib/time";
+import {
+  assertAttendanceMonthOpen,
+  getAttendanceMonthStatus,
+  listClosedAttendanceSnapshots,
+  lockAttendanceMonth,
+} from "@/lib/attendance-closing";
 
 export type PunchType = (typeof attendanceEventType.enumValues)[number];
 type QueryDatabase = Pick<AppDatabase, "select">;
@@ -135,7 +141,8 @@ export async function recomputeAttendanceDay(
 }
 
 function monthRange(month: string) {
-  if (!/^\d{4}-\d{2}$/.test(month)) throw new AttendanceError("対象月が正しくありません。");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+    throw new AttendanceError("対象月が正しくありません。");
   const [year, monthNumber] = month.split("-").map(Number);
   const next = new Date(Date.UTC(year, monthNumber, 1));
   return { from: `${month}-01`, to: next.toISOString().slice(0, 10) };
@@ -151,6 +158,38 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
     )
     .limit(1);
   if (!employee) throw new AttendanceError("従業員情報が紐付いていません。");
+  const closed = await listClosedAttendanceSnapshots(db, actor.organizationId, month);
+  if (closed) {
+    const days = closed.rows
+      .filter((row) => row.employeeId === employee.id)
+      .slice()
+      .reverse()
+      .map((row) => ({
+        breakMinutes: row.breakMinutes,
+        correction: null,
+        events: [],
+        id: row.attendanceDayId ?? row.id,
+        isCorrected: row.isCorrected,
+        overtimeMinutes: row.overtimeMinutes,
+        scheduledMinutes: row.scheduledMinutes,
+        status: row.status,
+        workDate: row.workDate,
+        workedMinutes: row.workedMinutes,
+      }));
+    return {
+      closure: closed.state,
+      days,
+      timezone: employee.timezone,
+      totals: days.reduce(
+        (total, day) => ({
+          overtimeMinutes: total.overtimeMinutes + (day.overtimeMinutes ?? 0),
+          scheduledMinutes: total.scheduledMinutes + day.scheduledMinutes,
+          workedMinutes: total.workedMinutes + (day.workedMinutes ?? 0),
+        }),
+        { overtimeMinutes: 0, scheduledMinutes: 0, workedMinutes: 0 },
+      ),
+    };
+  }
   const range = monthRange(month);
   const [dayRows, eventRows, correctionRows] = await Promise.all([
     db
@@ -238,6 +277,7 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
     })),
   }));
   return {
+    closure: await getAttendanceMonthStatus(db, actor.organizationId, month),
     days,
     timezone: employee.timezone,
     totals: days.reduce(
@@ -261,6 +301,26 @@ export async function listManagedAttendance(
     organizationId: string;
   },
 ) {
+  const closed = await listClosedAttendanceSnapshots(db, input.organizationId, input.month);
+  if (closed) {
+    return closed.rows
+      .filter((row) => !input.departmentId || row.departmentId === input.departmentId)
+      .filter((row) => !input.employeeId || row.employeeId === input.employeeId)
+      .filter((row) => !input.openOnly || row.status === "open")
+      .slice()
+      .reverse()
+      .map((row) => ({
+        departmentName: row.departmentName ?? "—",
+        displayName: row.displayName,
+        employeeId: row.employeeId,
+        isCorrected: row.isCorrected,
+        overtimeMinutes: row.overtimeMinutes,
+        scheduledMinutes: row.scheduledMinutes,
+        status: row.status,
+        workDate: row.workDate,
+        workedMinutes: row.workedMinutes,
+      }));
+  }
   const range = monthRange(input.month);
   const conditions = [
     eq(attendanceDays.organizationId, input.organizationId),
@@ -394,6 +454,8 @@ export async function punchAttendance(
   const context = await attendanceContext(db, actor, occurredAt);
 
   return db.transaction(async (transaction) => {
+    await lockAttendanceMonth(transaction, actor.organizationId, context.today.slice(0, 7));
+    await assertAttendanceMonthOpen(transaction, actor.organizationId, context.today);
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext(${`${context.employeeId}:${context.today}`}))`,
     );

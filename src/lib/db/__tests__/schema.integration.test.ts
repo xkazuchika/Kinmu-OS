@@ -7,6 +7,9 @@ import {
   attendanceCorrectionRequests,
   attendanceDays,
   attendanceEvents,
+  attendanceMonthDaySnapshots,
+  attendanceMonthPeriods,
+  attendanceMonthRevisions,
   auditLogs,
   dailyAttendanceSummaries,
   departments,
@@ -62,6 +65,9 @@ describeDatabase("database organization boundaries", () => {
 
   beforeEach(async () => {
     await client.db.execute(sql`TRUNCATE TABLE audit_logs`);
+    await client.db.delete(attendanceMonthDaySnapshots);
+    await client.db.delete(attendanceMonthRevisions);
+    await client.db.delete(attendanceMonthPeriods);
     await client.db.delete(attendanceCorrectionEntries);
     await client.db.delete(attendanceEvents);
     await client.db.delete(attendanceCorrectionRequests);

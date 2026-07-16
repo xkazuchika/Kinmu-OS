@@ -12,6 +12,7 @@ import {
   employees,
 } from "@/lib/db/schema";
 import { csv } from "@/lib/reporting";
+import { listClosedAttendanceSnapshots } from "@/lib/attendance-closing";
 
 export async function GET(request: Request, context: { params: Promise<{ kind: string }> }) {
   try {
@@ -58,42 +59,57 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
       ]);
     } else if (kind === "attendance") {
       const month = url.searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(month))
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
         return Response.json({ error: "対象月が正しくありません。" }, { status: 422 });
       const [year, monthNumber] = month.split("-").map(Number);
       const to = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
-      const rows = await database
-        .select({
-          displayName: employees.displayName,
-          employeeNumber: employees.employeeNumber,
-          isCorrected: sql<boolean>`exists (
+      const closed = await listClosedAttendanceSnapshots(database, actor.organizationId, month);
+      const rows = closed
+        ? closed.rows
+        : await database
+            .select({
+              displayName: employees.displayName,
+              employeeNumber: employees.employeeNumber,
+              isCorrected: sql<boolean>`exists (
             select 1 from ${attendanceEvents}
             where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
               and ${attendanceEvents.correctionRequestId} is not null
               and ${attendanceEvents.supersededByCorrectionRequestId} is null
           )`,
-          overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
-          scheduledMinutes: attendanceDays.scheduledMinutes,
-          status: attendanceDays.status,
-          workDate: attendanceDays.workDate,
-          workedMinutes: dailyAttendanceSummaries.workedMinutes,
-        })
-        .from(attendanceDays)
-        .innerJoin(employees, eq(employees.id, attendanceDays.employeeId))
-        .leftJoin(
-          dailyAttendanceSummaries,
-          eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
-        )
-        .where(
-          and(
-            eq(attendanceDays.organizationId, actor.organizationId),
-            gte(attendanceDays.workDate, `${month}-01`),
-            lt(attendanceDays.workDate, to),
-          ),
-        )
-        .orderBy(asc(attendanceDays.workDate), asc(employees.employeeNumber));
+              overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
+              scheduledMinutes: attendanceDays.scheduledMinutes,
+              status: attendanceDays.status,
+              workDate: attendanceDays.workDate,
+              workedMinutes: dailyAttendanceSummaries.workedMinutes,
+            })
+            .from(attendanceDays)
+            .innerJoin(employees, eq(employees.id, attendanceDays.employeeId))
+            .leftJoin(
+              dailyAttendanceSummaries,
+              eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
+            )
+            .where(
+              and(
+                eq(attendanceDays.organizationId, actor.organizationId),
+                gte(attendanceDays.workDate, `${month}-01`),
+                lt(attendanceDays.workDate, to),
+              ),
+            )
+            .orderBy(asc(attendanceDays.workDate), asc(employees.employeeNumber));
       content = csv([
-        ["勤務日", "従業員番号", "表示名", "状態", "実労働分", "所定分", "残業分", "修正済み"],
+        [
+          "勤務日",
+          "従業員番号",
+          "表示名",
+          "状態",
+          "実労働分",
+          "所定分",
+          "残業分",
+          "修正済み",
+          "月次状態",
+          "締め日時",
+          "締めリビジョン",
+        ],
         ...rows.map((row) => [
           row.workDate,
           row.employeeNumber,
@@ -103,9 +119,12 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           row.scheduledMinutes,
           row.overtimeMinutes,
           row.isCorrected ? "はい" : "いいえ",
+          closed ? "締め済み" : "編集中",
+          closed?.revision.closedAt.toISOString() ?? "",
+          closed?.revision.revision ?? "",
         ]),
       ]);
-      parameters = { kind, month };
+      parameters = { kind, month, revision: closed?.revision.revision ?? null };
     } else return Response.json({ error: "出力種別が正しくありません。" }, { status: 404 });
     await recordAudit(database, {
       action: "csv_exported",

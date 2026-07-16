@@ -80,7 +80,7 @@ export function loadEnvironment(source: EnvironmentSource = process.env): Runtim
     source.SOURCE_CODE_URL ?? "https://github.com/xkazuchika/Kinmu-OS",
     ["http:", "https:"],
   );
-  const appVersion = source.APP_VERSION?.trim() || "0.2.0";
+  const appVersion = source.APP_VERSION?.trim() || "0.3.0";
 
   if (isProduction && sessionSecret.length < 32) {
     throw new EnvironmentValidationError(
