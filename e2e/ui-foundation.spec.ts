@@ -393,3 +393,59 @@ test("HR reviews and approves an attendance correction", async ({ page }) => {
   ).toBeVisible();
   expect(consoleProblems).toEqual([]);
 });
+
+test("role-specific guide navigation is accessible and responsive", async ({ page }) => {
+  const consoleProblems = collectConsoleProblems(page);
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await login(page, hrAdmin.email, hrAdmin.password);
+  await page.goto("/about");
+  await page.getByRole("link", { name: "ガイドを開く" }).click();
+
+  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page.getByRole("heading", { level: 1, name: "利用ガイド" })).toBeVisible();
+  await expect(page.getByText("ログイン中の役割: 労務管理者")).toBeVisible();
+  const adminCards = page.locator(".guide-card");
+  await expect(adminCards.first()).toContainText("初期設定と従業員管理");
+  await adminCards.first().focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/guide\/admin-setup$/);
+  await expect(page.getByRole("heading", { level: 1, name: "初期設定と従業員管理" })).toBeVisible();
+  await expect(page.getByLabel("現在地")).toContainText("利用ガイド");
+  await expect(page.getByText("対象役割所有者・労務管理者")).toBeVisible();
+  await page.getByRole("link", { name: "ガイド一覧へ戻る" }).click();
+  await expect(page).toHaveURL(/\/guide$/);
+  const articleHrefs = await page
+    .locator(".guide-card")
+    .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute("href")));
+  expect(articleHrefs).toHaveLength(6);
+  for (const href of articleHrefs) {
+    expect(href).toBeTruthy();
+    const response = await page.goto(href!);
+    expect(response?.ok()).toBe(true);
+    await expect(page.locator(".guide-prose h1")).toHaveCount(1);
+    await expect(page.locator(".guide-load-error")).toHaveCount(0);
+  }
+  await page.goto("/guide");
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-guide-desktop.png" });
+
+  const notFoundResponse = await page.goto("/guide/not-a-guide");
+  expect(notFoundResponse?.status()).toBe(404);
+  await expect(page.locator(".guide-prose")).toHaveCount(0);
+
+  await login(page, employee.email, employee.password);
+  await page.setViewportSize({ height: 720, width: 320 });
+  await page.goto("/guide");
+  await expect(page.getByText("ログイン中の役割: 従業員")).toBeVisible();
+  await expect(page.locator(".guide-card").first()).toContainText("打刻・勤務実績・プロフィール");
+  await page.locator(".guide-card").first().click();
+  await expect(page).toHaveURL(/\/guide\/employee-attendance$/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await expect(
+    page.getByRole("heading", { level: 1, name: "打刻・勤務実績・プロフィール" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("現在地")).toContainText("打刻・勤務実績・プロフィール");
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-guide-mobile.png" });
+  expect(consoleProblems.filter((problem) => !problem.includes("status of 404"))).toEqual([]);
+});
