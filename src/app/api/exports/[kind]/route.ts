@@ -1,18 +1,13 @@
-import { and, asc, eq, gte, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 
 import { recordAudit } from "@/lib/audit";
+import { listManagedAttendance } from "@/lib/attendance";
 import { AuthorizationError, requireActor, requirePermission } from "@/lib/authorization";
 import { getDatabase } from "@/lib/db/client";
-import {
-  attendanceDays,
-  attendanceEvents,
-  dailyAttendanceSummaries,
-  departments,
-  employeeDepartments,
-  employees,
-} from "@/lib/db/schema";
+import { departments, employeeDepartments, employees } from "@/lib/db/schema";
 import { csv } from "@/lib/reporting";
 import { listClosedAttendanceSnapshots } from "@/lib/attendance-closing";
+import { listManagedLeaveLedger } from "@/lib/leave-ledger";
 
 export async function GET(request: Request, context: { params: Promise<{ kind: string }> }) {
   try {
@@ -61,41 +56,11 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
       const month = url.searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
         return Response.json({ error: "対象月が正しくありません。" }, { status: 422 });
-      const [year, monthNumber] = month.split("-").map(Number);
-      const to = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
       const closed = await listClosedAttendanceSnapshots(database, actor.organizationId, month);
-      const rows = closed
-        ? closed.rows
-        : await database
-            .select({
-              displayName: employees.displayName,
-              employeeNumber: employees.employeeNumber,
-              isCorrected: sql<boolean>`exists (
-            select 1 from ${attendanceEvents}
-            where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
-              and ${attendanceEvents.correctionRequestId} is not null
-              and ${attendanceEvents.supersededByCorrectionRequestId} is null
-          )`,
-              overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
-              scheduledMinutes: attendanceDays.scheduledMinutes,
-              status: attendanceDays.status,
-              workDate: attendanceDays.workDate,
-              workedMinutes: dailyAttendanceSummaries.workedMinutes,
-            })
-            .from(attendanceDays)
-            .innerJoin(employees, eq(employees.id, attendanceDays.employeeId))
-            .leftJoin(
-              dailyAttendanceSummaries,
-              eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
-            )
-            .where(
-              and(
-                eq(attendanceDays.organizationId, actor.organizationId),
-                gte(attendanceDays.workDate, `${month}-01`),
-                lt(attendanceDays.workDate, to),
-              ),
-            )
-            .orderBy(asc(attendanceDays.workDate), asc(employees.employeeNumber));
+      const rows = await listManagedAttendance(database, {
+        month,
+        organizationId: actor.organizationId,
+      });
       content = csv([
         [
           "勤務日",
@@ -106,6 +71,14 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           "所定分",
           "残業分",
           "修正済み",
+          "業務状態",
+          "カレンダー根拠",
+          "カレンダー表示",
+          "休暇コード",
+          "休暇名",
+          "休暇単位",
+          "休暇対応所定分",
+          "欠勤理由",
           "月次状態",
           "締め日時",
           "締めリビジョン",
@@ -119,12 +92,66 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           row.scheduledMinutes,
           row.overtimeMinutes,
           row.isCorrected ? "はい" : "いいえ",
+          row.operationalStatus ?? "",
+          row.calendarSource ?? "",
+          row.calendarLabel ?? "",
+          row.leaveTypeCode ?? "",
+          row.leaveTypeName ?? "",
+          row.leaveUnits ?? "",
+          row.leaveScheduledMinutes ?? "",
+          row.absenceReason ?? "",
           closed ? "締め済み" : "編集中",
           closed?.revision.closedAt.toISOString() ?? "",
           closed?.revision.revision ?? "",
         ]),
       ]);
       parameters = { kind, month, revision: closed?.revision.revision ?? null };
+    } else if (kind === "leave-ledger") {
+      const from = url.searchParams.get("from") ?? undefined;
+      const to = url.searchParams.get("to") ?? undefined;
+      const employeeId = url.searchParams.get("employeeId") ?? undefined;
+      const leaveTypeId = url.searchParams.get("leaveTypeId") ?? undefined;
+      const ledger = await listManagedLeaveLedger(database, actor, {
+        employeeId,
+        from,
+        leaveTypeId,
+        to,
+      });
+      const balances = new Map<string, number>();
+      const rows = ledger
+        .slice()
+        .reverse()
+        .map((row) => {
+          const key = `${row.employeeId}:${row.leaveTypeId}`;
+          const balance = (balances.get(key) ?? 0) + row.units;
+          balances.set(key, balance);
+          return { ...row, balance };
+        });
+      content = csv([
+        [
+          "基準日",
+          "従業員番号",
+          "部署",
+          "休暇コード",
+          "休暇名",
+          "取引区分",
+          "単位",
+          "残高",
+          "理由",
+        ],
+        ...rows.map((row) => [
+          row.effectiveOn,
+          row.employeeNumber,
+          row.departmentName ?? "",
+          row.leaveTypeCode,
+          row.leaveTypeName,
+          row.kind,
+          row.units,
+          row.balance,
+          row.reason,
+        ]),
+      ]);
+      parameters = { employeeId, from, kind, leaveTypeId, to };
     } else return Response.json({ error: "出力種別が正しくありません。" }, { status: 404 });
     await recordAudit(database, {
       action: "csv_exported",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { Button, SelectField, TextareaField, Toast } from "@/components/ui";
@@ -25,15 +26,40 @@ type HistoryItem = {
 };
 
 export type CorrectionDay = {
+  absenceReason?: string | null;
+  calendarLabel?: string;
   correction: { id: string; status: CorrectionStatus } | null;
   events: EventEntry[];
   id: string;
   isCorrected: boolean;
+  leaveScheduledMinutes?: number | null;
+  leaveTypeName?: string | null;
+  leaveUnits?: number | null;
+  operationalStatus?:
+    | "absence"
+    | "conflict"
+    | "leave_full"
+    | "leave_half_worked"
+    | "non_workday"
+    | "open_punch"
+    | "unresolved"
+    | "worked";
   overtimeMinutes: number | null;
   scheduledMinutes: number;
   status: "complete" | "open";
   workDate: string;
   workedMinutes: number | null;
+};
+
+const operationalStatusLabels: Record<NonNullable<CorrectionDay["operationalStatus"]>, string> = {
+  absence: "欠勤",
+  conflict: "要確認",
+  leave_full: "全日休暇",
+  leave_half_worked: "半日休暇・勤務",
+  non_workday: "休日",
+  open_punch: "未退勤",
+  unresolved: "未解決",
+  worked: "勤務済み",
 };
 
 const eventLabels: Record<PunchType, string> = {
@@ -233,7 +259,13 @@ export function AttendanceCorrectionPanel({
               <div className="attendance-day-heading">
                 <div>
                   <strong>{day.workDate}</strong>
-                  <span>{day.status === "open" ? "未退勤" : "退勤済み"}</span>
+                  <span>
+                    {day.operationalStatus
+                      ? operationalStatusLabels[day.operationalStatus]
+                      : day.status === "open"
+                        ? "未退勤"
+                        : "退勤済み"}
+                  </span>
                   {day.isCorrected ? (
                     <span className="status-pill status-pill--approved">修正済み</span>
                   ) : null}
@@ -244,7 +276,13 @@ export function AttendanceCorrectionPanel({
                   ) : null}
                 </div>
                 <Button
-                  disabled={closed || day.correction?.status === "pending"}
+                  disabled={
+                    closed ||
+                    day.correction?.status === "pending" ||
+                    day.operationalStatus === "leave_full" ||
+                    day.operationalStatus === "absence" ||
+                    day.operationalStatus === "non_workday"
+                  }
                   onClick={() => begin(day)}
                   type="button"
                   variant="secondary"
@@ -256,6 +294,24 @@ export function AttendanceCorrectionPanel({
                       : "修正を申請"}
                 </Button>
               </div>
+              {day.calendarLabel || day.leaveTypeName || day.absenceReason ? (
+                <div className="attendance-day-context">
+                  {day.calendarLabel ? <span>勤務予定: {day.calendarLabel}</span> : null}
+                  {day.leaveTypeName ? (
+                    <span>
+                      休暇: {day.leaveTypeName} {(day.leaveUnits ?? 0) / 2}日（対応所定{" "}
+                      {day.leaveScheduledMinutes ?? 0}分）
+                    </span>
+                  ) : null}
+                  {day.absenceReason ? <span>欠勤理由: {day.absenceReason}</span> : null}
+                  {day.operationalStatus === "unresolved" ? (
+                    <span>打刻を確認し、必要なら下の修正申請を送信してください。</span>
+                  ) : null}
+                  {day.operationalStatus === "conflict" ? (
+                    <Link href="/leave">休暇申請を確認</Link>
+                  ) : null}
+                </div>
+              ) : null}
               <ol className="attendance-event-list" aria-label={`${day.workDate}の有効打刻`}>
                 {day.events.map((event) => (
                   <li key={event.id}>

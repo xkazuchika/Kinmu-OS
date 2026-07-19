@@ -64,6 +64,9 @@ export default async function MyAttendancePage({
           <dd>{hours(attendance.totals.overtimeMinutes)}</dd>
         </div>
       </dl>
+      <p className="report-note">
+        実労働・残業には休暇の対応所定時間を加算していません。この表示は法令適合を自動判定するものではありません。
+      </p>
       {attendance.days.length === 0 ? (
         <section className="home-section" aria-labelledby="daily-records-heading">
           <h2 id="daily-records-heading">

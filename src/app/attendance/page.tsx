@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   Button,
   EmptyState,
@@ -17,9 +17,24 @@ import {
 type Department = { active: boolean; id: string; name: string };
 type Employee = { displayName: string; id: string };
 type Attendance = {
+  absenceReason: string | null;
+  calendarLabel: string;
+  calendarSource: string;
   departmentName: string;
   displayName: string;
   employeeId: string;
+  leaveScheduledMinutes: number | null;
+  leaveTypeName: string | null;
+  leaveUnits: number | null;
+  operationalStatus:
+    | "absence"
+    | "conflict"
+    | "leave_full"
+    | "leave_half_worked"
+    | "non_workday"
+    | "open_punch"
+    | "unresolved"
+    | "worked";
   overtimeMinutes: number | null;
   scheduledMinutes: number;
   status: "complete" | "open";
@@ -27,7 +42,14 @@ type Attendance = {
   workedMinutes: number | null;
 };
 type Closing = {
-  blockers: { invalidDays: number; openDays: number; pendingCorrections: number };
+  blockers: {
+    conflictingDays: number;
+    invalidDays: number;
+    openDays: number;
+    pendingCorrections: number;
+    pendingLeaveRequests: number;
+    unresolvedDays: number;
+  };
   canClose: boolean;
   ended: boolean;
   month: string;
@@ -41,6 +63,8 @@ type Closing = {
   summary: {
     dayCount: number;
     employeeCount: number;
+    absenceDays: number;
+    leaveDays: number;
     overtimeMinutes: number;
     scheduledMinutes: number;
     workedMinutes: number;
@@ -48,6 +72,17 @@ type Closing = {
 };
 const minutes = (value: number | null) =>
   value === null ? "—" : `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
+
+const operationalStatusLabels: Record<Attendance["operationalStatus"], string> = {
+  absence: "欠勤",
+  conflict: "要確認",
+  leave_full: "全日休暇",
+  leave_half_worked: "半日休暇・勤務",
+  non_workday: "休日",
+  open_punch: "未退勤",
+  unresolved: "未解決",
+  worked: "勤務済み",
+};
 
 export default function AttendanceManagementPage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
@@ -61,14 +96,20 @@ export default function AttendanceManagementPage() {
   const [reopenReason, setReopenReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
-  async function load(event?: FormEvent<HTMLFormElement>, month = selectedMonth) {
+  const [selectedStatus, setSelectedStatus] = useState("");
+  async function load(
+    event?: FormEvent<HTMLFormElement>,
+    month = selectedMonth,
+    status = selectedStatus,
+  ) {
     event?.preventDefault();
     const parameters = event
       ? new URLSearchParams(
           Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>,
         )
-      : new URLSearchParams({ month });
+      : new URLSearchParams({ month, ...(status ? { status } : {}) });
     setSelectedMonth(parameters.get("month") ?? currentMonth);
+    setSelectedStatus(parameters.get("status") ?? "");
     const [attendanceResponse, departmentResponse, employeeResponse, closingResponse] =
       await Promise.all([
         fetch(`/api/attendance?${parameters}`),
@@ -93,6 +134,15 @@ export default function AttendanceManagementPage() {
     if (closingResponse.ok) setClosing(closingPayload.closing);
     setError(undefined);
   }
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    const month = parameters.get("month") ?? currentMonth;
+    const status = parameters.get("status") ?? "";
+    const timer = window.setTimeout(() => void load(undefined, month, status), 0);
+    return () => window.clearTimeout(timer);
+    // URLの初期条件だけを初回表示時に反映する。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function updateClosing() {
     if (!closing || !dialog) return;
     setSubmitting(true);
@@ -153,9 +203,19 @@ export default function AttendanceManagementPage() {
               </option>
             ))}
           </SelectField>
-          <SelectField id="attendance-filter-status" label="状態" name="status">
+          <SelectField
+            id="attendance-filter-status"
+            label="状態"
+            name="status"
+            onChange={(event) => setSelectedStatus(event.target.value)}
+            value={selectedStatus}
+          >
             <option value="">すべて</option>
             <option value="open">未退勤のみ</option>
+            <option value="unresolved">未解決のみ</option>
+            <option value="leave">休暇のみ</option>
+            <option value="absence">欠勤のみ</option>
+            <option value="conflict">日区分の競合のみ</option>
           </SelectField>
           <Button type="submit" variant="secondary">
             表示
@@ -203,12 +263,32 @@ export default function AttendanceManagementPage() {
                   <dd>{closing.summary.dayCount}日</dd>
                 </div>
                 <div>
+                  <dt>休暇</dt>
+                  <dd>{closing.summary.leaveDays}日</dd>
+                </div>
+                <div>
+                  <dt>欠勤</dt>
+                  <dd>{closing.summary.absenceDays}日</dd>
+                </div>
+                <div>
                   <dt>未退勤</dt>
                   <dd>{closing.blockers.openDays}件</dd>
                 </div>
                 <div>
                   <dt>審査待ち</dt>
                   <dd>{closing.blockers.pendingCorrections}件</dd>
+                </div>
+                <div>
+                  <dt>審査待ち休暇</dt>
+                  <dd>{closing.blockers.pendingLeaveRequests}件</dd>
+                </div>
+                <div>
+                  <dt>未解決</dt>
+                  <dd>{closing.blockers.unresolvedDays}件</dd>
+                </div>
+                <div>
+                  <dt>日区分の競合</dt>
+                  <dd>{closing.blockers.conflictingDays}件</dd>
                 </div>
                 <div>
                   <dt>集計未作成</dt>
@@ -221,6 +301,19 @@ export default function AttendanceManagementPage() {
               ) : null}
               {closing.blockers.pendingCorrections ? (
                 <Link href="/attendance/corrections?status=pending">審査待ち申請を確認</Link>
+              ) : null}
+              {closing.blockers.pendingLeaveRequests ? (
+                <Link href="/leave/reviews?status=pending">審査待ち休暇を確認</Link>
+              ) : null}
+              {closing.blockers.unresolvedDays ? (
+                <Link href={`/attendance?month=${closing.month}&status=unresolved`}>
+                  未解決の勤務日を確認
+                </Link>
+              ) : null}
+              {closing.blockers.conflictingDays ? (
+                <Link href={`/attendance?month=${closing.month}&status=conflict`}>
+                  日区分の競合を確認
+                </Link>
               ) : null}
             </>
           )}
@@ -245,9 +338,12 @@ export default function AttendanceManagementPage() {
               <th>従業員</th>
               <th>部署</th>
               <th>状態</th>
+              <th>勤務予定の根拠</th>
+              <th>休暇・欠勤</th>
               <th>実労働</th>
               <th>所定</th>
               <th>残業</th>
+              <th>確認</th>
             </tr>
           </thead>
           <tbody>
@@ -256,10 +352,28 @@ export default function AttendanceManagementPage() {
                 <td>{day.workDate}</td>
                 <td>{day.displayName}</td>
                 <td>{day.departmentName}</td>
-                <td>{day.status === "open" ? "未退勤" : "退勤済み"}</td>
+                <td>{operationalStatusLabels[day.operationalStatus]}</td>
+                <td>{day.calendarLabel}</td>
+                <td>
+                  {day.leaveTypeName
+                    ? `${day.leaveTypeName} ${(day.leaveUnits ?? 0) / 2}日（${minutes(day.leaveScheduledMinutes)}）`
+                    : day.absenceReason
+                      ? `欠勤：${day.absenceReason}`
+                      : "—"}
+                </td>
                 <td>{minutes(day.workedMinutes)}</td>
                 <td>{minutes(day.scheduledMinutes)}</td>
                 <td>{minutes(day.overtimeMinutes)}</td>
+                <td>
+                  {day.operationalStatus === "unresolved" ||
+                  day.operationalStatus === "open_punch" ? (
+                    <Link href="/attendance/corrections">勤怠申請を確認</Link>
+                  ) : day.operationalStatus === "conflict" ? (
+                    <Link href="/leave/reviews">休暇審査を確認</Link>
+                  ) : (
+                    "—"
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

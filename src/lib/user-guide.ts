@@ -14,7 +14,7 @@ export type GuideEntry = Readonly<{
   title: string;
 }>;
 
-export const GUIDE_VERSION = "0.3.0";
+export const GUIDE_VERSION = "0.4.0";
 export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
@@ -33,6 +33,30 @@ export const guideCatalog = [
     roles: ["owner", "hr_admin"],
     order: 20,
     file: "admin-setup.md",
+  },
+  {
+    slug: "work-calendar",
+    title: "勤務カレンダーの設定",
+    description: "曜日パターン、会社休日、臨時勤務日、従業員別例外を設定します。",
+    roles: ["owner", "hr_admin"],
+    order: 25,
+    file: "work-calendar.md",
+  },
+  {
+    slug: "leave-management",
+    title: "休暇種別・付与・残高管理",
+    description: "休暇種別、手動・CSV付与、調整、台帳と失効予定を管理します。",
+    roles: ["owner", "hr_admin"],
+    order: 27,
+    file: "leave-management.md",
+  },
+  {
+    slug: "leave-requests",
+    title: "休暇申請・審査・欠勤確定",
+    description: "全日・半日の申請と取消、審査、競合、欠勤確定を確認します。",
+    roles: ["owner", "hr_admin", "employee"],
+    order: 35,
+    file: "leave-requests.md",
   },
   {
     slug: "employee-attendance",
@@ -112,9 +136,18 @@ export function validateGuideCatalog(catalog: readonly GuideEntry[] = guideCatal
 export function guidesForRole(role: GuideRole) {
   validateGuideCatalog();
   const preferred: Readonly<Record<GuideRole, readonly string[]>> = {
-    employee: ["employee-attendance", "attendance-corrections", "overview", "troubleshooting"],
+    employee: [
+      "leave-requests",
+      "employee-attendance",
+      "attendance-corrections",
+      "overview",
+      "troubleshooting",
+    ],
     hr_admin: [
       "admin-setup",
+      "work-calendar",
+      "leave-management",
+      "leave-requests",
       "attendance-corrections",
       "monthly-closing",
       "reports-and-audit",
@@ -123,6 +156,9 @@ export function guidesForRole(role: GuideRole) {
     ],
     owner: [
       "admin-setup",
+      "work-calendar",
+      "leave-management",
+      "leave-requests",
       "attendance-corrections",
       "monthly-closing",
       "reports-and-audit",

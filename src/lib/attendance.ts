@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 
 import type { SessionActor } from "@/lib/authorization";
+import { projectOperationalAttendanceMonth } from "@/lib/attendance-operations";
+import type { AttendanceOperationStatus } from "@/lib/attendance-operations";
 import type { AppDatabase } from "@/lib/db/client";
 import {
   attendanceDays,
@@ -11,11 +13,14 @@ import {
   departments,
   employeeDepartments,
   employees,
+  leaveRequestDays,
+  leaveRequests,
   organizations,
 } from "@/lib/db/schema";
 import { assertEmployeeCanPunch } from "@/lib/employees";
-import { findEffectiveWorkRule } from "@/lib/db/work-rules";
 import { calculateDailyMinutes, workDateFor, type WorkDate } from "@/lib/time";
+import { findEffectiveWorkRule } from "@/lib/db/work-rules";
+import { resolveWorkSchedule } from "@/lib/work-calendar";
 import {
   assertAttendanceMonthOpen,
   getAttendanceMonthStatus,
@@ -170,6 +175,15 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
         events: [],
         id: row.attendanceDayId ?? row.id,
         isCorrected: row.isCorrected,
+        absenceReason: row.absenceReason,
+        calendarLabel: row.calendarLabel ?? "締め時の勤務予定",
+        calendarSource: row.calendarSource ?? "closed_snapshot",
+        leaveScheduledMinutes: row.leaveScheduledMinutes,
+        leaveTypeCode: row.leaveTypeCode,
+        leaveTypeName: row.leaveTypeName,
+        leaveUnits: row.leaveUnits,
+        operationalStatus:
+          row.operationalStatus ?? (row.status === "open" ? "open_punch" : "worked"),
         overtimeMinutes: row.overtimeMinutes,
         scheduledMinutes: row.scheduledMinutes,
         status: row.status,
@@ -191,7 +205,7 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
     };
   }
   const range = monthRange(month);
-  const [dayRows, eventRows, correctionRows] = await Promise.all([
+  const [dayRows, eventRows, correctionRows, projectedRows] = await Promise.all([
     db
       .select({
         breakMinutes: dailyAttendanceSummaries.breakMinutes,
@@ -254,6 +268,11 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
         ),
       )
       .orderBy(desc(attendanceCorrectionRequests.createdAt)),
+    projectOperationalAttendanceMonth(db, {
+      employeeIds: [employee.id],
+      month,
+      organizationId: actor.organizationId,
+    }),
   ]);
   const eventsByDay = new Map<string, typeof eventRows>();
   for (const event of eventRows) {
@@ -267,15 +286,32 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
       latestCorrectionByDate.set(correction.workDate, correction);
     }
   }
-  const days = dayRows.map((day) => ({
-    ...day,
-    correction: latestCorrectionByDate.get(day.workDate) ?? null,
-    events: (eventsByDay.get(day.id) ?? []).map((event) => ({
-      id: event.id,
-      occurredAt: event.occurredAt.toISOString(),
-      type: event.type,
-    })),
-  }));
+  const existingById = new Map(dayRows.map((day) => [day.id, day]));
+  const days = projectedRows
+    .slice()
+    .reverse()
+    .map((day) => ({
+      ...day,
+      id: day.attendanceDayId ?? `${day.employeeId}:${day.workDate}`,
+      isCorrected: day.attendanceDayId
+        ? (existingById.get(day.attendanceDayId)?.isCorrected ?? false)
+        : false,
+      status:
+        day.attendanceStatus ??
+        (day.operationalStatus === "open_punch" ||
+        day.operationalStatus === "unresolved" ||
+        day.operationalStatus === "conflict"
+          ? ("open" as const)
+          : ("complete" as const)),
+      correction: latestCorrectionByDate.get(day.workDate) ?? null,
+      events: (day.attendanceDayId ? (eventsByDay.get(day.attendanceDayId) ?? []) : []).map(
+        (event) => ({
+          id: event.id,
+          occurredAt: event.occurredAt.toISOString(),
+          type: event.type,
+        }),
+      ),
+    }));
   return {
     closure: await getAttendanceMonthStatus(db, actor.organizationId, month),
     days,
@@ -298,6 +334,7 @@ export async function listManagedAttendance(
     employeeId?: string;
     month: string;
     openOnly?: boolean;
+    operationalStatuses?: AttendanceOperationStatus[];
     organizationId: string;
   },
 ) {
@@ -307,13 +344,29 @@ export async function listManagedAttendance(
       .filter((row) => !input.departmentId || row.departmentId === input.departmentId)
       .filter((row) => !input.employeeId || row.employeeId === input.employeeId)
       .filter((row) => !input.openOnly || row.status === "open")
+      .filter(
+        (row) =>
+          !input.operationalStatuses?.length ||
+          (row.operationalStatus !== null &&
+            input.operationalStatuses.includes(row.operationalStatus)),
+      )
       .slice()
       .reverse()
       .map((row) => ({
         departmentName: row.departmentName ?? "—",
         displayName: row.displayName,
+        employeeNumber: row.employeeNumber,
         employeeId: row.employeeId,
         isCorrected: row.isCorrected,
+        absenceReason: row.absenceReason,
+        calendarLabel: row.calendarLabel ?? "締め時の勤務予定",
+        calendarSource: row.calendarSource ?? "closed_snapshot",
+        leaveScheduledMinutes: row.leaveScheduledMinutes,
+        leaveTypeCode: row.leaveTypeCode,
+        leaveTypeName: row.leaveTypeName,
+        leaveUnits: row.leaveUnits,
+        operationalStatus:
+          row.operationalStatus ?? (row.status === "open" ? "open_punch" : "worked"),
         overtimeMinutes: row.overtimeMinutes,
         scheduledMinutes: row.scheduledMinutes,
         status: row.status,
@@ -321,44 +374,76 @@ export async function listManagedAttendance(
         workedMinutes: row.workedMinutes,
       }));
   }
-  const range = monthRange(input.month);
-  const conditions = [
-    eq(attendanceDays.organizationId, input.organizationId),
-    gte(attendanceDays.workDate, range.from),
-    lt(attendanceDays.workDate, range.to),
-    eq(employeeDepartments.isPrimary, true),
-    isNull(employeeDepartments.endedOn),
-  ];
-  if (input.departmentId) conditions.push(eq(departments.id, input.departmentId));
-  if (input.employeeId) conditions.push(eq(employees.id, input.employeeId));
-  if (input.openOnly) conditions.push(eq(attendanceDays.status, "open"));
-  return db
-    .select({
-      departmentName: departments.name,
-      displayName: employees.displayName,
-      employeeId: employees.id,
-      isCorrected: sql<boolean>`exists (
-        select 1 from ${attendanceEvents}
-        where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
-          and ${attendanceEvents.correctionRequestId} is not null
-          and ${attendanceEvents.supersededByCorrectionRequestId} is null
-      )`,
-      overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
-      scheduledMinutes: attendanceDays.scheduledMinutes,
-      status: attendanceDays.status,
-      workDate: attendanceDays.workDate,
-      workedMinutes: dailyAttendanceSummaries.workedMinutes,
+  const [projected, affiliations, correctedRows] = await Promise.all([
+    projectOperationalAttendanceMonth(db, {
+      employeeIds: input.employeeId ? [input.employeeId] : undefined,
+      month: input.month,
+      organizationId: input.organizationId,
+    }),
+    db
+      .select({
+        departmentId: departments.id,
+        departmentName: departments.name,
+        employeeId: employeeDepartments.employeeId,
+      })
+      .from(employeeDepartments)
+      .innerJoin(departments, eq(departments.id, employeeDepartments.departmentId))
+      .innerJoin(employees, eq(employees.id, employeeDepartments.employeeId))
+      .where(
+        and(
+          eq(employees.organizationId, input.organizationId),
+          eq(employeeDepartments.isPrimary, true),
+          isNull(employeeDepartments.endedOn),
+        ),
+      ),
+    db
+      .select({ attendanceDayId: attendanceEvents.attendanceDayId })
+      .from(attendanceEvents)
+      .where(
+        and(
+          eq(attendanceEvents.organizationId, input.organizationId),
+          sql`${attendanceEvents.correctionRequestId} IS NOT NULL`,
+          isNull(attendanceEvents.supersededByCorrectionRequestId),
+        ),
+      )
+      .groupBy(attendanceEvents.attendanceDayId),
+  ]);
+  const affiliationByEmployee = new Map(affiliations.map((row) => [row.employeeId, row]));
+  const corrected = new Set(correctedRows.map((row) => row.attendanceDayId));
+  return projected
+    .filter((day) => {
+      const affiliation = affiliationByEmployee.get(day.employeeId);
+      return !input.departmentId || affiliation?.departmentId === input.departmentId;
     })
-    .from(attendanceDays)
-    .innerJoin(employees, eq(employees.id, attendanceDays.employeeId))
-    .innerJoin(employeeDepartments, eq(employeeDepartments.employeeId, employees.id))
-    .innerJoin(departments, eq(departments.id, employeeDepartments.departmentId))
-    .leftJoin(
-      dailyAttendanceSummaries,
-      eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
+    .filter(
+      (day) =>
+        !input.openOnly ||
+        day.operationalStatus === "open_punch" ||
+        day.operationalStatus === "unresolved" ||
+        day.operationalStatus === "conflict",
     )
-    .where(and(...conditions))
-    .orderBy(desc(attendanceDays.workDate), asc(employees.displayName));
+    .filter(
+      (day) =>
+        !input.operationalStatuses?.length ||
+        input.operationalStatuses.includes(day.operationalStatus),
+    )
+    .map((day) => ({
+      ...day,
+      departmentName: affiliationByEmployee.get(day.employeeId)?.departmentName ?? "—",
+      isCorrected: day.attendanceDayId ? corrected.has(day.attendanceDayId) : false,
+      status:
+        day.attendanceStatus ??
+        (day.operationalStatus === "open_punch" ||
+        day.operationalStatus === "unresolved" ||
+        day.operationalStatus === "conflict"
+          ? ("open" as const)
+          : ("complete" as const)),
+    }))
+    .sort(
+      (left, right) =>
+        right.workDate.localeCompare(left.workDate) ||
+        left.displayName.localeCompare(right.displayName),
+    );
 }
 
 const nextActions: Record<PunchType | "none", PunchType[]> = {
@@ -459,6 +544,23 @@ export async function punchAttendance(
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext(${`${context.employeeId}:${context.today}`}))`,
     );
+    const [fullDayLeave] = await transaction
+      .select({ requestId: leaveRequests.id })
+      .from(leaveRequestDays)
+      .innerJoin(leaveRequests, eq(leaveRequests.id, leaveRequestDays.requestId))
+      .where(
+        and(
+          eq(leaveRequests.organizationId, actor.organizationId),
+          eq(leaveRequests.employeeId, context.employeeId),
+          eq(leaveRequests.status, "approved"),
+          eq(leaveRequestDays.workDate, context.today),
+          eq(leaveRequestDays.units, 2),
+        ),
+      )
+      .limit(1);
+    if (fullDayLeave) {
+      throw new AttendanceError("承認済みの全日休暇がある日は通常打刻できません。");
+    }
     let day = await relevantDay(transaction, context.employeeId, context.today);
     const state = await stateForDay(transaction, day);
     const type = input.type as PunchType;
@@ -475,19 +577,27 @@ export async function punchAttendance(
       throw new AttendanceError("直前の打刻より後の時刻を記録してください。");
     }
     if (!day) {
-      const rule = await findEffectiveWorkRule(transaction, {
+      const schedule = await resolveWorkSchedule(transaction, {
         employeeId: context.employeeId,
         organizationId: actor.organizationId,
         workDate: context.today as WorkDate,
       });
+      const legacyRule =
+        schedule.calendarSource === "inactive_calendar"
+          ? await findEffectiveWorkRule(transaction, {
+              employeeId: context.employeeId,
+              organizationId: actor.organizationId,
+              workDate: context.today as WorkDate,
+            })
+          : undefined;
       [day] = await transaction
         .insert(attendanceDays)
         .values({
           employeeId: context.employeeId,
           organizationId: actor.organizationId,
-          scheduledMinutes: rule?.dailyStandardMinutes ?? 0,
+          scheduledMinutes: legacyRule?.dailyStandardMinutes ?? schedule.scheduledMinutes,
           workDate: context.today,
-          workRuleId: rule?.id,
+          workRuleId: legacyRule?.id ?? schedule.workRuleId ?? undefined,
         })
         .returning();
     }

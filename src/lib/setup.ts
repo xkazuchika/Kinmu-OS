@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 
 import type { AppDatabase } from "@/lib/db/client";
-import { initialSetupLinks, organizations, users } from "@/lib/db/schema";
+import { initialSetupLinks, organizations, users, workCalendarPatterns } from "@/lib/db/schema";
 import { TimeValidationError, validateOrganizationTimezone } from "@/lib/time";
 
 const SETUP_LINK_LIFETIME_MS = 48 * 60 * 60 * 1000;
@@ -88,6 +88,11 @@ export async function initializeOrganization(db: AppDatabase, input: InitialSetu
         role: "owner",
       })
       .returning();
+    await transaction.insert(workCalendarPatterns).values({
+      createdByUserId: owner.id,
+      effectiveFrom: new Date().toISOString().slice(0, 10),
+      organizationId: organization.id,
+    });
     const token = randomBytes(32).toString("base64url");
     const tokenHash = createHash("sha256").update(token).digest("hex");
 

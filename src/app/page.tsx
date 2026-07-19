@@ -86,6 +86,36 @@ function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof manage
             </Link>
           </dd>
         </div>
+        <div>
+          <dt>未解決の勤務日</dt>
+          <dd>
+            <Link href="/attendance?status=unresolved">{summary.unresolvedDays}件</Link>
+          </dd>
+        </div>
+        <div>
+          <dt>審査待ち休暇</dt>
+          <dd>
+            <Link href="/leave/reviews?status=pending">{summary.pendingLeaveRequests}件</Link>
+          </dd>
+        </div>
+        <div>
+          <dt>今月の休暇</dt>
+          <dd>
+            <Link href="/attendance?status=leave">{summary.leaveDays}日</Link>
+          </dd>
+        </div>
+        <div>
+          <dt>欠勤</dt>
+          <dd>
+            <Link href="/attendance?status=absence">{summary.absences}件</Link>
+          </dd>
+        </div>
+        <div>
+          <dt>日区分の競合</dt>
+          <dd>
+            <Link href="/attendance?status=conflict">{summary.conflictingDays}件</Link>
+          </dd>
+        </div>
       </dl>
       <section className="home-section">
         <h2>従業員別の残業</h2>

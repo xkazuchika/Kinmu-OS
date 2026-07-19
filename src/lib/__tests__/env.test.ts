@@ -8,7 +8,7 @@ describe("loadEnvironment", () => {
 
     expect(environment.nodeEnv).toBe("development");
     expect(environment.appUrl.toString()).toBe("http://localhost:3000/");
-    expect(environment.appVersion).toBe("0.3.0");
+    expect(environment.appVersion).toBe("0.4.0");
     expect(environment.databaseUrl).toContain("localhost:5432/kinmu");
     expect(environment.sourceCodeUrl.toString()).toBe("https://github.com/xkazuchika/Kinmu-OS");
   });

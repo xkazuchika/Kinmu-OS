@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 
 import { createDatabaseClient } from "@/lib/db/client";
-import { initialSetupLinks, organizations, users } from "@/lib/db/schema";
+import { initialSetupLinks, organizations, users, workCalendarPatterns } from "@/lib/db/schema";
 import { activateSetupLink, sessionForToken } from "@/lib/auth";
 import { InitialSetupError, initializeOrganization } from "@/lib/setup";
 import { createUserWithSetupLink, setUserEnabled } from "@/lib/users";
@@ -35,6 +35,7 @@ describeDatabase("initializeOrganization", () => {
     const [organization] = await client.db.select().from(organizations);
     const [owner] = await client.db.select().from(users);
     const [setupLink] = await client.db.select().from(initialSetupLinks);
+    const [calendarDraft] = await client.db.select().from(workCalendarPatterns);
 
     expect(organization).toMatchObject({
       name: "勤怠株式会社",
@@ -47,6 +48,14 @@ describeDatabase("initializeOrganization", () => {
       status: "pending_setup",
     });
     expect(setupLink.tokenHash).toBe(createHash("sha256").update(result.setupToken).digest("hex"));
+    expect(calendarDraft).toMatchObject({
+      fridayWorkday: true,
+      mondayWorkday: true,
+      organizationId: organization.id,
+      saturdayWorkday: false,
+      status: "draft",
+      sundayWorkday: false,
+    });
   });
 
   it("rejects a second initial setup", async () => {

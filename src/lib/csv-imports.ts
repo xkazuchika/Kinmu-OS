@@ -60,7 +60,7 @@ function parseCsv(csv: string) {
   return rows;
 }
 
-function records(csv: string, expectedHeaders: string[]) {
+export function csvRecords(csv: string, expectedHeaders: string[]) {
   const [headers, ...rows] = parseCsv(csv.replace(/^\uFEFF/, ""));
   if (!headers || headers.join(",") !== expectedHeaders.join(",")) {
     throw new CsvImportValidationError("CSVの列がテンプレートと一致しません。", [
@@ -108,7 +108,7 @@ export async function previewCsvImport(
   input: { csv: string; kind: ImportKind; organizationId: string },
 ) {
   if (input.kind === "departments") {
-    const parsed = records(input.csv, departmentHeaders);
+    const parsed = csvRecords(input.csv, departmentHeaders);
     const existing = await db
       .select({ code: departments.code, name: departments.name })
       .from(departments)
@@ -129,7 +129,7 @@ export async function previewCsvImport(
     return { errors, preview };
   }
 
-  const parsed = records(input.csv, employeeHeaders);
+  const parsed = csvRecords(input.csv, employeeHeaders);
   const activeDepartments = await db
     .select({ code: departments.code, id: departments.id, name: departments.name })
     .from(departments)

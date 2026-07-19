@@ -297,10 +297,16 @@ test("employee home and records work at 320 CSS pixels", async ({ page }) => {
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await expect(page.getByRole("heading", { level: 1, name: "勤務実績" })).toBeVisible();
   await expect(page.getByLabel("表示する月")).toBeVisible();
-  const attendanceDay = page.locator(".attendance-day-list article").first();
-  const workDate = (await attendanceDay.locator("strong").first().textContent())!.trim();
+  const workDate = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const attendanceDay = page
+    .locator(".attendance-day-list article")
+    .filter({ has: page.getByText(workDate, { exact: true }) });
   await attendanceDay.getByRole("button", { name: "修正を申請" }).click();
-  await page.getByLabel("1件目の時刻").fill(`${workDate}T09:00`);
+  const secondPunch = await page.getByLabel("2件目の時刻").inputValue();
+  const [secondHour, secondMinute] = secondPunch.slice(11, 16).split(":").map(Number);
+  const earlierMinute = Math.max(0, secondHour * 60 + secondMinute - 1);
+  const earlierTime = `${String(Math.floor(earlierMinute / 60)).padStart(2, "0")}:${String(earlierMinute % 60).padStart(2, "0")}`;
+  await page.getByLabel("1件目の時刻").fill(`${workDate}T${earlierTime}`);
   await page.getByLabel("修正理由").fill("出勤時刻を入力し直すため");
   await expect(page.getByText("変更", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
@@ -313,7 +319,7 @@ test("employee home and records work at 320 CSS pixels", async ({ page }) => {
   await expect(page.getByText("申請を取り消しました。")).toBeVisible();
 
   await attendanceDay.getByRole("button", { name: "修正を申請" }).click();
-  await page.getByLabel("1件目の時刻").fill(`${workDate}T09:00`);
+  await page.getByLabel("1件目の時刻").fill(`${workDate}T${earlierTime}`);
   await page.getByLabel("修正理由").fill("管理者確認用の出勤時刻修正");
   await page.getByRole("button", { name: "この内容で申請" }).click();
   await expect(page.getByText("審査待ち", { exact: true }).first()).toBeVisible();
@@ -322,7 +328,7 @@ test("employee home and records work at 320 CSS pixels", async ({ page }) => {
   );
   await page.screenshot({ fullPage: false, path: "/tmp/kinmu-os-mobile-records.png" });
 
-  await page.getByRole("link", { name: "プロフィール" }).click();
+  await page.goto("/profile");
   await expect(page.getByRole("heading", { level: 1, name: "プロフィール" })).toBeVisible();
   await expect(page.getByRole("main").getByText("従業員 花子")).toBeVisible();
   await page.goto("/about");
@@ -337,7 +343,15 @@ test("HR reviews and approves an attendance correction", async ({ page }) => {
   const consoleProblems = collectConsoleProblems(page);
   await page.setViewportSize({ height: 900, width: 1440 });
   await login(page, hrAdmin.email, hrAdmin.password);
-  await page.goto("/attendance/corrections?status=pending");
+  const employeesResponse = await page.request.get("/api/employees?status=all");
+  const employeeRecords = (await employeesResponse.json()) as {
+    employees: Array<{ employeeNumber: string; id: string }>;
+  };
+  const employeeRecord = employeeRecords.employees.find(
+    (record) => record.employeeNumber === employee.employeeNumber,
+  );
+  expect(employeeRecord).toBeTruthy();
+  await page.goto(`/attendance/corrections?status=pending&employeeId=${employeeRecord!.id}`);
 
   await expect(page).toHaveTitle("Kinmu-OS");
   await expect(page.getByRole("heading", { level: 1, name: "勤怠申請" })).toBeVisible();
@@ -345,11 +359,8 @@ test("HR reviews and approves an attendance correction", async ({ page }) => {
     "aria-current",
     "page",
   );
-  await page
-    .getByRole("button", { name: /従業員 花子/ })
-    .first()
-    .click();
-  await expect(page.getByText("管理者確認用の出勤時刻修正")).toBeVisible();
+  await page.getByRole("button", { name: /従業員 花子/ }).click();
+  await expect(page.getByText("管理者確認用の出勤時刻修正").first()).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: "修正前" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: "申請後" })).toBeVisible();
   await expect(page.getByText("変更", { exact: true })).toBeVisible();
@@ -423,12 +434,15 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
     });
     expect(response.status()).toBe(201);
   };
+  const nextMonth = new Date(`${targetMonth}-01T00:00:00.000Z`);
+  nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+  const nextMonthStart = nextMonth.toISOString().slice(0, 10);
+  let managedEmployeeId = "";
   const approvePendingCorrection = async () => {
-    await page.goto("/attendance/corrections?status=pending");
-    await page
-      .getByRole("button", { name: /従業員 花子/ })
-      .first()
-      .click();
+    await page.goto(
+      `/attendance/corrections?status=pending&employeeId=${managedEmployeeId}&from=${targetMonth}-01&to=${nextMonthStart}`,
+    );
+    await page.getByRole("button", { name: /従業員 花子/ }).click();
     await page.getByRole("button", { name: "承認する" }).click();
     await page
       .getByRole("alertdialog", { name: "勤怠修正を承認しますか？" })
@@ -438,6 +452,14 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
   };
   await page.setViewportSize({ height: 900, width: 1440 });
   await login(page, hrAdmin.email, hrAdmin.password);
+  const employeesResponse = await page.request.get("/api/employees?status=all");
+  const employeeRecords = (await employeesResponse.json()) as {
+    employees: Array<{ employeeNumber: string; id: string }>;
+  };
+  managedEmployeeId =
+    employeeRecords.employees.find((record) => record.employeeNumber === employee.employeeNumber)
+      ?.id ?? "";
+  expect(managedEmployeeId).not.toBe("");
 
   const stateResponse = await page.request.get(`/api/attendance/closing?month=${targetMonth}`);
   expect(stateResponse.ok()).toBe(true);
@@ -522,6 +544,133 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
   expect(consoleProblems).toEqual([]);
 });
 
+test("HR configures leave and an employee completes the mobile request workflow", async ({
+  page,
+}) => {
+  const consoleProblems = collectConsoleProblems(page);
+  const currentDate = new Date();
+  const workday = new Date(currentDate);
+  workday.setUTCDate(workday.getUTCDate() + 3);
+  while (workday.getUTCDay() === 0 || workday.getUTCDay() === 6) {
+    workday.setUTCDate(workday.getUTCDate() + 1);
+  }
+  const workDate = workday.toISOString().slice(0, 10);
+  const grantedOn = currentDate.toISOString().slice(0, 10);
+
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const calendarResponse = await page.request.get("/api/calendar");
+  const calendar = (await calendarResponse.json()) as {
+    patterns: Array<{ id: string; status: "active" | "draft" | "inactive" }>;
+  };
+  const calendarWasActive = calendar.patterns.some((pattern) => pattern.status === "active");
+  await page.goto("/calendar");
+  await expect(page.getByRole("heading", { level: 1, name: "勤務カレンダー" })).toBeVisible();
+  if (!calendarWasActive) {
+    const activationButton = page.getByRole("button", { name: "影響を確認" }).first();
+    await expect(activationButton).toBeVisible();
+    await activationButton.click();
+    const dialog = page.getByRole("alertdialog", { name: "勤務カレンダーを有効化しますか？" });
+    await expect(dialog.getByText(/在籍従業員/)).toBeVisible();
+    await dialog.getByRole("button", { name: "この内容で有効化" }).click();
+    await expect(page.getByText(/勤務カレンダーを有効化しました/)).toBeVisible();
+  }
+  await expect(page.getByRole("cell", { name: "有効", exact: true }).first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v04-calendar-desktop.png" });
+
+  const typesResponse = await page.request.get("/api/leave/types");
+  const typePayload = (await typesResponse.json()) as {
+    leaveTypes: Array<{ code: string; id: string }>;
+  };
+  let leaveType = typePayload.leaveTypes.find((item) => item.code === "E2EPAID");
+  if (!leaveType) {
+    const createType = await page.request.post("/api/leave/types", {
+      data: {
+        action: "create",
+        code: "E2EPAID",
+        consumesBalance: true,
+        effectiveFrom: "2026-01-01",
+        name: "E2E年次有給休暇",
+        paid: true,
+        requestable: true,
+      },
+    });
+    expect(createType.status()).toBe(201);
+    leaveType = ((await createType.json()) as { leaveType: { code: string; id: string } })
+      .leaveType;
+  }
+
+  const employeesResponse = await page.request.get("/api/employees?status=all");
+  const employeeRecords = (await employeesResponse.json()) as {
+    employees: Array<{ employeeNumber: string; id: string }>;
+  };
+  const employeeRecord = employeeRecords.employees.find(
+    (record) => record.employeeNumber === employee.employeeNumber,
+  );
+  expect(employeeRecord).toBeTruthy();
+
+  await page.goto("/leave/manage");
+  await expect(page.getByRole("heading", { level: 1, name: "休暇管理" })).toBeVisible();
+  const balanceForm = page.locator("form").filter({ has: page.locator("#balance-employee") });
+  await balanceForm.locator("#balance-employee").selectOption(employeeRecord!.id);
+  await balanceForm.locator("#balance-type").selectOption(leaveType!.id);
+  await balanceForm.locator("#balance-date").fill(grantedOn);
+  await balanceForm.locator("#balance-units").fill("4");
+  await balanceForm.locator("#balance-reason").fill("E2E年度付与");
+  await balanceForm.getByRole("button", { name: "台帳へ記録" }).click();
+  await expect(page.getByText("休暇を付与しました。")).toBeVisible();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v04-leave-manage-desktop.png" });
+
+  await login(page, employee.email, employee.password);
+  await page.setViewportSize({ height: 720, width: 320 });
+  await page.goto("/leave");
+  await expect(page.getByRole("heading", { level: 1, name: "休暇" })).toBeVisible();
+  await expect(page.getByText("E2E年次有給休暇").first()).toBeVisible();
+  await page.getByLabel("休暇種別").selectOption(leaveType!.id);
+  await page.getByLabel("申請単位").selectOption("full_day");
+  await page.getByLabel("開始日").fill(workDate);
+  await page.getByLabel("終了日").fill(workDate);
+  await page.getByLabel("申請理由").fill("E2E休暇申請");
+  await page.getByRole("button", { name: "対象日と残高を確認" }).click();
+  const requestDialog = page.getByRole("alertdialog", { name: "休暇申請を送信しますか？" });
+  await expect(requestDialog.getByText(workDate)).toBeVisible();
+  await requestDialog.getByRole("button", { name: "この内容で申請" }).click();
+  await expect(page.getByText(/休暇を申請しました/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v04-leave-mobile.png" });
+
+  await login(page, hrAdmin.email, hrAdmin.password);
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await page.goto("/leave/reviews?status=pending");
+  await expect(page.getByRole("heading", { level: 1, name: "休暇審査" })).toBeVisible();
+  const requestButton = page
+    .locator(".review-list button")
+    .filter({ hasText: employee.employeeNumber })
+    .first();
+  await requestButton.click();
+  await expect(page.getByText("E2E休暇申請")).toBeVisible();
+  await expect(page.getByRole("cell", { name: workDate })).toBeVisible();
+  await page.getByRole("button", { name: "承認内容を確認" }).click();
+  await page
+    .getByRole("alertdialog", { name: "休暇申請を承認しますか？" })
+    .getByRole("button", { name: "休暇を承認" })
+    .click();
+  await expect(page.getByText("休暇申請を承認しました。")).toBeVisible();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v04-leave-review-desktop.png" });
+
+  const leaveCsv = await page.request.get(
+    "/api/exports/leave-ledger?employeeId=" + employeeRecord!.id,
+  );
+  expect(leaveCsv.ok()).toBe(true);
+  expect(await leaveCsv.text()).toContain("E2EPAID");
+  expect(consoleProblems).toEqual([]);
+});
+
 test("role-specific guide navigation is accessible and responsive", async ({ page }) => {
   const consoleProblems = collectConsoleProblems(page);
   await page.setViewportSize({ height: 900, width: 1440 });
@@ -545,7 +694,7 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   const articleHrefs = await page
     .locator(".guide-card")
     .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute("href")));
-  expect(articleHrefs).toHaveLength(7);
+  expect(articleHrefs).toHaveLength(10);
   for (const href of articleHrefs) {
     expect(href).toBeTruthy();
     const response = await page.goto(href!);
@@ -564,16 +713,16 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   await page.setViewportSize({ height: 720, width: 320 });
   await page.goto("/guide");
   await expect(page.getByText("ログイン中の役割: 従業員")).toBeVisible();
-  await expect(page.locator(".guide-card").first()).toContainText("打刻・勤務実績・プロフィール");
+  await expect(page.locator(".guide-card").first()).toContainText("休暇申請・審査・欠勤確定");
   await page.locator(".guide-card").first().click();
-  await expect(page).toHaveURL(/\/guide\/employee-attendance$/);
+  await expect(page).toHaveURL(/\/guide\/leave-requests$/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
   await expect(
-    page.getByRole("heading", { level: 1, name: "打刻・勤務実績・プロフィール" }),
+    page.getByRole("heading", { level: 1, name: "休暇申請・審査・欠勤確定" }),
   ).toBeVisible();
-  await expect(page.getByLabel("現在地")).toContainText("打刻・勤務実績・プロフィール");
+  await expect(page.getByLabel("現在地")).toContainText("休暇申請・審査・欠勤確定");
   await page.screenshot({ fullPage: true, path: "/tmp/kinmu-guide-mobile.png" });
   expect(consoleProblems.filter((problem) => !problem.includes("status of 404"))).toEqual([]);
 });

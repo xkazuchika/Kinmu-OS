@@ -7,7 +7,9 @@ import { employees } from "@/lib/db/schema";
 export type Permission =
   | "audit:read"
   | "attendance:manage"
+  | "calendar:manage"
   | "employees:manage"
+  | "leave:manage"
   | "reports:read"
   | "self:read"
   | "self:write"
@@ -26,7 +28,9 @@ const permissionsByRole: Readonly<Record<SessionActor["role"], ReadonlySet<Permi
   owner: new Set([
     "audit:read",
     "attendance:manage",
+    "calendar:manage",
     "employees:manage",
+    "leave:manage",
     "reports:read",
     "self:read",
     "self:write",
@@ -35,7 +39,9 @@ const permissionsByRole: Readonly<Record<SessionActor["role"], ReadonlySet<Permi
   hr_admin: new Set([
     "audit:read",
     "attendance:manage",
+    "calendar:manage",
     "employees:manage",
+    "leave:manage",
     "reports:read",
     "self:read",
     "self:write",

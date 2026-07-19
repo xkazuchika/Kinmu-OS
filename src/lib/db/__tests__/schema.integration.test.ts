@@ -64,6 +64,7 @@ describeDatabase("database organization boundaries", () => {
   );
 
   beforeEach(async () => {
+    await client.db.execute(sql`TRUNCATE TABLE organizations CASCADE`);
     await client.db.execute(sql`TRUNCATE TABLE audit_logs`);
     await client.db.delete(attendanceMonthDaySnapshots);
     await client.db.delete(attendanceMonthRevisions);

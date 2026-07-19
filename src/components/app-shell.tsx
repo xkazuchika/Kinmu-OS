@@ -21,6 +21,9 @@ const managementItems = [
   { href: "/employees", icon: PeopleIcon, label: "従業員" },
   { href: "/attendance", icon: ClockIcon, label: "勤怠" },
   { href: "/attendance/corrections", icon: ReportIcon, label: "勤怠申請" },
+  { href: "/calendar", icon: ClockIcon, label: "勤務カレンダー" },
+  { href: "/leave/manage", icon: ReportIcon, label: "休暇管理" },
+  { href: "/leave/reviews", icon: ShieldIcon, label: "休暇審査" },
   { href: "/reports", icon: ReportIcon, label: "レポート" },
   { href: "/settings/users", icon: UserIcon, label: "利用者管理" },
   { href: "/audit", icon: ShieldIcon, label: "監査ログ" },
@@ -30,6 +33,7 @@ const managementItems = [
 const employeeItems = [
   { href: "/", icon: HomeIcon, label: "ホーム" },
   { href: "/attendance/me", icon: ClockIcon, label: "勤務実績" },
+  { href: "/leave", icon: ReportIcon, label: "休暇" },
   { href: "/profile", icon: UserIcon, label: "プロフィール" },
   { href: "/about", icon: ShieldIcon, label: "このソフト" },
 ];

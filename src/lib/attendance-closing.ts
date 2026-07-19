@@ -1,6 +1,7 @@
-import { and, asc, count, eq, gte, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import { recordAudit } from "@/lib/audit";
+import { projectOperationalAttendanceMonth } from "@/lib/attendance-operations";
 import type { SessionActor } from "@/lib/authorization";
 import { requirePermission } from "@/lib/authorization";
 import type { AppDatabase } from "@/lib/db/client";
@@ -15,6 +16,8 @@ import {
   departments,
   employeeDepartments,
   employees,
+  leaveRequestDays,
+  leaveRequests,
   organizations,
   users,
   workRules,
@@ -144,70 +147,108 @@ export async function inspectAttendanceMonth(
   month: string,
 ) {
   const range = attendanceMonthRange(month);
-  const [[openDays], [pending], [invalid], [summary]] = await Promise.all([
-    db
-      .select({ value: count() })
-      .from(attendanceDays)
-      .where(
-        and(
-          eq(attendanceDays.organizationId, organizationId),
-          gte(attendanceDays.workDate, range.from),
-          lt(attendanceDays.workDate, range.to),
-          eq(attendanceDays.status, "open"),
+  const [[pendingLeave], [openDays], [pending], [invalid], [legacySummary], projected] =
+    await Promise.all([
+      db
+        .select({ value: sql<number>`count(distinct ${leaveRequests.id})::int` })
+        .from(leaveRequests)
+        .innerJoin(leaveRequestDays, eq(leaveRequestDays.requestId, leaveRequests.id))
+        .where(
+          and(
+            eq(leaveRequests.organizationId, organizationId),
+            eq(leaveRequests.status, "pending"),
+            gte(leaveRequestDays.workDate, range.from),
+            lt(leaveRequestDays.workDate, range.to),
+          ),
         ),
-      ),
-    db
-      .select({ value: count() })
-      .from(attendanceCorrectionRequests)
-      .where(
-        and(
-          eq(attendanceCorrectionRequests.organizationId, organizationId),
-          gte(attendanceCorrectionRequests.workDate, range.from),
-          lt(attendanceCorrectionRequests.workDate, range.to),
-          eq(attendanceCorrectionRequests.status, "pending"),
+      db
+        .select({ value: count() })
+        .from(attendanceDays)
+        .where(
+          and(
+            eq(attendanceDays.organizationId, organizationId),
+            gte(attendanceDays.workDate, range.from),
+            lt(attendanceDays.workDate, range.to),
+            eq(attendanceDays.status, "open"),
+          ),
         ),
-      ),
-    db
-      .select({ value: count() })
-      .from(attendanceDays)
-      .leftJoin(
-        dailyAttendanceSummaries,
-        eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
-      )
-      .where(
-        and(
-          eq(attendanceDays.organizationId, organizationId),
-          gte(attendanceDays.workDate, range.from),
-          lt(attendanceDays.workDate, range.to),
-          eq(attendanceDays.status, "complete"),
-          isNull(dailyAttendanceSummaries.id),
+      db
+        .select({ value: count() })
+        .from(attendanceCorrectionRequests)
+        .where(
+          and(
+            eq(attendanceCorrectionRequests.organizationId, organizationId),
+            gte(attendanceCorrectionRequests.workDate, range.from),
+            lt(attendanceCorrectionRequests.workDate, range.to),
+            eq(attendanceCorrectionRequests.status, "pending"),
+          ),
         ),
-      ),
-    db
-      .select({
-        dayCount: sql<number>`count(${attendanceDays.id})::int`,
-        employeeCount: sql<number>`count(distinct ${attendanceDays.employeeId})::int`,
-        overtimeMinutes: sql<number>`coalesce(sum(${dailyAttendanceSummaries.overtimeMinutes}), 0)::int`,
-        scheduledMinutes: sql<number>`coalesce(sum(${attendanceDays.scheduledMinutes}), 0)::int`,
-        workedMinutes: sql<number>`coalesce(sum(${dailyAttendanceSummaries.workedMinutes}), 0)::int`,
-      })
-      .from(attendanceDays)
-      .leftJoin(
-        dailyAttendanceSummaries,
-        eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
-      )
-      .where(
-        and(
-          eq(attendanceDays.organizationId, organizationId),
-          gte(attendanceDays.workDate, range.from),
-          lt(attendanceDays.workDate, range.to),
+      db
+        .select({ value: count() })
+        .from(attendanceDays)
+        .leftJoin(
+          dailyAttendanceSummaries,
+          eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
+        )
+        .where(
+          and(
+            eq(attendanceDays.organizationId, organizationId),
+            gte(attendanceDays.workDate, range.from),
+            lt(attendanceDays.workDate, range.to),
+            eq(attendanceDays.status, "complete"),
+            isNull(dailyAttendanceSummaries.id),
+          ),
         ),
-      ),
-  ]);
+      db
+        .select({
+          dayCount: sql<number>`count(${attendanceDays.id})::int`,
+          employeeCount: sql<number>`count(distinct ${attendanceDays.employeeId})::int`,
+          overtimeMinutes: sql<number>`coalesce(sum(${dailyAttendanceSummaries.overtimeMinutes}), 0)::int`,
+          scheduledMinutes: sql<number>`coalesce(sum(${attendanceDays.scheduledMinutes}), 0)::int`,
+          workedMinutes: sql<number>`coalesce(sum(${dailyAttendanceSummaries.workedMinutes}), 0)::int`,
+        })
+        .from(attendanceDays)
+        .leftJoin(
+          dailyAttendanceSummaries,
+          eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
+        )
+        .where(
+          and(
+            eq(attendanceDays.organizationId, organizationId),
+            gte(attendanceDays.workDate, range.from),
+            lt(attendanceDays.workDate, range.to),
+          ),
+        ),
+      projectOperationalAttendanceMonth(db, { month, organizationId }),
+    ]);
+  const calendarActive = projected.some((day) => day.calendarSource !== "inactive_calendar");
+  const unresolvedDays = calendarActive
+    ? projected.filter((day) => day.operationalStatus === "unresolved").length
+    : 0;
+  const conflictingDays = calendarActive
+    ? projected.filter((day) => day.operationalStatus === "conflict").length
+    : 0;
+  const summary = calendarActive
+    ? {
+        absenceDays: projected.filter((day) => day.operationalStatus === "absence").length,
+        dayCount: projected.length,
+        employeeCount: new Set(projected.map((day) => day.employeeId)).size,
+        leaveDays: projected.filter(
+          (day) =>
+            day.operationalStatus === "leave_full" || day.operationalStatus === "leave_half_worked",
+        ).length,
+        overtimeMinutes: projected.reduce((sum, day) => sum + (day.overtimeMinutes ?? 0), 0),
+        scheduledMinutes: projected.reduce((sum, day) => sum + day.scheduledMinutes, 0),
+        workedMinutes: projected.reduce((sum, day) => sum + (day.workedMinutes ?? 0), 0),
+      }
+    : { ...legacySummary, absenceDays: 0, leaveDays: 0 };
   const blockers = {
+    conflictingDays,
     invalidDays: invalid.value,
     openDays: openDays.value,
     pendingCorrections: pending.value,
+    pendingLeaveRequests: pendingLeave.value,
+    unresolvedDays,
   };
   return {
     blockers,
@@ -231,55 +272,74 @@ async function snapshotRows(
   organizationId: string,
   month: string,
 ) {
-  const range = attendanceMonthRange(month);
-  return db
-    .select({
-      attendanceDayId: attendanceDays.id,
-      breakMinutes: dailyAttendanceSummaries.breakMinutes,
-      departmentCode: departments.code,
-      departmentId: departments.id,
-      departmentName: departments.name,
-      displayName: employees.displayName,
-      employeeId: employees.id,
-      employeeNumber: employees.employeeNumber,
-      isCorrected: sql<boolean>`exists (
-        select 1 from ${attendanceEvents}
-        where ${attendanceEvents.attendanceDayId} = ${attendanceDays.id}
-          and ${attendanceEvents.correctionRequestId} is not null
-          and ${attendanceEvents.supersededByCorrectionRequestId} is null
-      )`,
-      overtimeMinutes: dailyAttendanceSummaries.overtimeMinutes,
-      scheduledMinutes: attendanceDays.scheduledMinutes,
-      status: attendanceDays.status,
-      workDate: attendanceDays.workDate,
-      workedMinutes: dailyAttendanceSummaries.workedMinutes,
-      workRuleId: attendanceDays.workRuleId,
-      workRuleName: workRules.name,
-    })
-    .from(attendanceDays)
-    .innerJoin(employees, eq(employees.id, attendanceDays.employeeId))
-    .leftJoin(
-      employeeDepartments,
-      and(
-        eq(employeeDepartments.employeeId, employees.id),
-        eq(employeeDepartments.isPrimary, true),
-        isNull(employeeDepartments.endedOn),
+  const projected = await projectOperationalAttendanceMonth(db, { month, organizationId });
+  const employeeIds = [...new Set(projected.map((day) => day.employeeId))];
+  if (!employeeIds.length) return [];
+  const [affiliations, correctedDays] = await Promise.all([
+    db
+      .select({
+        code: departments.code,
+        departmentId: departments.id,
+        employeeId: employeeDepartments.employeeId,
+        name: departments.name,
+      })
+      .from(employeeDepartments)
+      .innerJoin(departments, eq(departments.id, employeeDepartments.departmentId))
+      .where(
+        and(
+          inArray(employeeDepartments.employeeId, employeeIds),
+          eq(employeeDepartments.isPrimary, true),
+          isNull(employeeDepartments.endedOn),
+        ),
       ),
-    )
-    .leftJoin(departments, eq(departments.id, employeeDepartments.departmentId))
-    .leftJoin(workRules, eq(workRules.id, attendanceDays.workRuleId))
-    .leftJoin(
-      dailyAttendanceSummaries,
-      eq(dailyAttendanceSummaries.attendanceDayId, attendanceDays.id),
-    )
-    .where(
-      and(
-        eq(attendanceDays.organizationId, organizationId),
-        gte(attendanceDays.workDate, range.from),
-        lt(attendanceDays.workDate, range.to),
-      ),
-    )
-    .orderBy(asc(attendanceDays.workDate), asc(employees.employeeNumber));
+    db
+      .select({ attendanceDayId: attendanceEvents.attendanceDayId })
+      .from(attendanceEvents)
+      .where(
+        and(
+          eq(attendanceEvents.organizationId, organizationId),
+          sql`${attendanceEvents.correctionRequestId} IS NOT NULL`,
+          isNull(attendanceEvents.supersededByCorrectionRequestId),
+        ),
+      )
+      .groupBy(attendanceEvents.attendanceDayId),
+  ]);
+  const affiliationByEmployee = new Map(affiliations.map((row) => [row.employeeId, row]));
+  const corrected = new Set(correctedDays.map((row) => row.attendanceDayId));
+  return projected.map((day) => {
+    const affiliation = affiliationByEmployee.get(day.employeeId);
+    return {
+      absenceReason: day.absenceReason,
+      attendanceDayId: day.attendanceDayId,
+      breakMinutes: day.breakMinutes,
+      calendarLabel: day.calendarLabel,
+      calendarSource: day.calendarSource,
+      departmentCode: affiliation?.code ?? null,
+      departmentId: affiliation?.departmentId ?? null,
+      departmentName: affiliation?.name ?? null,
+      displayName: day.displayName,
+      employeeId: day.employeeId,
+      employeeNumber: day.employeeNumber,
+      isCorrected: day.attendanceDayId ? corrected.has(day.attendanceDayId) : false,
+      leaveScheduledMinutes: day.leaveScheduledMinutes,
+      leaveTypeCode: day.leaveTypeCode,
+      leaveTypeName: day.leaveTypeName,
+      leaveUnits: day.leaveUnits,
+      operationalStatus: day.operationalStatus,
+      overtimeMinutes: day.overtimeMinutes,
+      scheduledMinutes: day.scheduledMinutes,
+      status:
+        day.operationalStatus === "open_punch" ||
+        day.operationalStatus === "unresolved" ||
+        day.operationalStatus === "conflict"
+          ? ("open" as const)
+          : ("complete" as const),
+      workDate: day.workDate,
+      workedMinutes: day.workedMinutes,
+      workRuleId: day.workRuleId,
+      workRuleName: day.workRuleName,
+    };
+  });
 }
 
 export async function closeAttendanceMonth(
@@ -314,7 +374,9 @@ export async function closeAttendanceMonth(
     }
     const inspection = await inspectAttendanceMonth(transaction, actor.organizationId, month);
     if (!inspection.canClose) {
-      throw new AttendanceClosingValidationError("未退勤または審査待ちを解消してください。");
+      throw new AttendanceClosingValidationError(
+        "未退勤、審査待ち休暇、未解決勤務日、または日区分競合を解消してください。",
+      );
     }
     const rows = await snapshotRows(transaction, actor.organizationId, month);
     const [revision] = await transaction
@@ -333,13 +395,15 @@ export async function closeAttendanceMonth(
       })
       .returning();
     if (rows.length) {
-      await transaction.insert(attendanceMonthDaySnapshots).values(
-        rows.map((row) => ({
-          ...row,
-          organizationId: actor.organizationId,
-          revisionId: revision.id,
-        })),
-      );
+      for (let offset = 0; offset < rows.length; offset += 1_000) {
+        await transaction.insert(attendanceMonthDaySnapshots).values(
+          rows.slice(offset, offset + 1_000).map((row) => ({
+            ...row,
+            organizationId: actor.organizationId,
+            revisionId: revision.id,
+          })),
+        );
+      }
     }
     const [updated] = await transaction
       .update(attendanceMonthPeriods)

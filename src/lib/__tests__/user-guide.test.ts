@@ -30,12 +30,12 @@ describe("user guide catalog", () => {
       guidesForRole("employee")
         .slice(0, 2)
         .map((guide) => guide.slug),
-    ).toEqual(["employee-attendance", "attendance-corrections"]);
+    ).toEqual(["leave-requests", "employee-attendance"]);
     expect(
       guidesForRole("hr_admin")
         .slice(0, 3)
         .map((guide) => guide.slug),
-    ).toEqual(["admin-setup", "attendance-corrections", "monthly-closing"]);
+    ).toEqual(["admin-setup", "work-calendar", "leave-management"]);
   });
 
   it("keeps every catalog file, version, heading and internal link consistent", async () => {
@@ -45,11 +45,24 @@ describe("user guide catalog", () => {
       expect(markdown).toMatch(/^# .+/);
       expect(markdown).toContain(`対象バージョン: ${GUIDE_VERSION}`);
       expect(markdown).toMatch(/^## .+/m);
+      expect(markdown).toContain("## 現行版の制限");
+      expect(markdown).toContain("時間単位休暇");
+      expect(markdown).toContain("自動法令判定");
+      expect(markdown).toContain("多段承認");
+      expect(markdown).toContain("代理申請");
+      expect(markdown).toContain("通知は未対応");
+      expect(markdown).toContain("法令や就業規則への適合を判定するものではありません");
       for (const match of markdown.matchAll(/\[[^\]]+\]\(([^)]+\.md)\)/g)) {
         expect(knownFiles.has(match[1]), `${guide.file} -> ${match[1]}`).toBe(true);
       }
       expect(() => parseGuideMarkdown(markdown)).not.toThrow();
     }
+  });
+
+  it("includes guide Markdown in the production standalone output", async () => {
+    const config = await readFile(path.join(process.cwd(), "next.config.ts"), "utf8");
+    expect(config).toContain('output: "standalone"');
+    expect(config).toContain('"./docs/user-guide/**/*.md"');
   });
 });
 

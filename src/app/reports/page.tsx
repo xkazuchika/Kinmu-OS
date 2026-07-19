@@ -40,6 +40,13 @@ export default function ReportsPage() {
             従業員台帳CSVを出力
           </a>
         </article>
+        <article>
+          <h2>休暇台帳CSV</h2>
+          <p>付与・調整・消化・戻し・失効を追記順に出力します。</p>
+          <a className="ui-button ui-button--secondary" download href="/api/exports/leave-ledger">
+            休暇台帳CSVを出力
+          </a>
+        </article>
       </section>
     </main>
   );

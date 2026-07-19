@@ -13,12 +13,20 @@ export async function GET(request: Request) {
     requirePermission(actor, "attendance:manage");
     const url = new URL(request.url);
     const month = url.searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
+    const status = url.searchParams.get("status");
+    const operationalStatuses =
+      status === "leave"
+        ? (["leave_full", "leave_half_worked"] as const)
+        : status === "absence" || status === "conflict" || status === "unresolved"
+          ? ([status] as const)
+          : undefined;
     const [attendance, closing] = await Promise.all([
       listManagedAttendance(database, {
         departmentId: url.searchParams.get("departmentId") || undefined,
         employeeId: url.searchParams.get("employeeId") || undefined,
         month,
         openOnly: url.searchParams.get("status") === "open",
+        operationalStatuses: operationalStatuses ? [...operationalStatuses] : undefined,
         organizationId: actor.organizationId,
       }),
       getAttendanceMonthStatus(database, actor.organizationId, month),
