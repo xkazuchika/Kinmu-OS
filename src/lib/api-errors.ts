@@ -6,6 +6,15 @@ import { AuthorizationError } from "@/lib/authorization";
 import { CsvImportValidationError } from "@/lib/csv-imports";
 import { LeaveLedgerConflictError, LeaveLedgerValidationError } from "@/lib/leave-ledger";
 import { LeaveRequestConflictError, LeaveRequestValidationError } from "@/lib/leave-requests";
+import { NotificationValidationError } from "@/lib/notifications";
+import {
+  OvertimePolicyConflictError,
+  OvertimePolicyValidationError,
+} from "@/lib/overtime-policies";
+import {
+  OvertimeRequestConflictError,
+  OvertimeRequestValidationError,
+} from "@/lib/overtime-requests";
 import { WorkCalendarConflictError, WorkCalendarValidationError } from "@/lib/work-calendar";
 
 export function domainErrorResponse(error: unknown, fallback: string) {
@@ -19,6 +28,8 @@ export function domainErrorResponse(error: unknown, fallback: string) {
     error instanceof AttendanceClosingConflictError ||
     error instanceof LeaveLedgerConflictError ||
     error instanceof LeaveRequestConflictError ||
+    error instanceof OvertimePolicyConflictError ||
+    error instanceof OvertimeRequestConflictError ||
     error instanceof WorkCalendarConflictError
   ) {
     return Response.json({ error: error.message }, { status: 409 });
@@ -30,6 +41,9 @@ export function domainErrorResponse(error: unknown, fallback: string) {
     error instanceof AttendanceClosingValidationError ||
     error instanceof LeaveLedgerValidationError ||
     error instanceof LeaveRequestValidationError ||
+    error instanceof NotificationValidationError ||
+    error instanceof OvertimePolicyValidationError ||
+    error instanceof OvertimeRequestValidationError ||
     error instanceof WorkCalendarValidationError
   ) {
     return Response.json({ error: error.message }, { status: 422 });

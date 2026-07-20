@@ -99,6 +99,36 @@ function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof manage
           </dd>
         </div>
         <div>
+          <dt>審査待ち残業</dt>
+          <dd>
+            <Link href="/overtime/reviews?status=pending">{summary.pendingOvertimeRequests}件</Link>
+          </dd>
+        </div>
+        <div>
+          <dt>申請超過</dt>
+          <dd>
+            <Link href="/attendance?overtimeStatus=exceeded_request">
+              {summary.overtimeReconciliations.exceededRequest}件
+            </Link>
+          </dd>
+        </div>
+        <div>
+          <dt>実績なし</dt>
+          <dd>
+            <Link href="/attendance?overtimeStatus=no_actual">
+              {summary.overtimeReconciliations.noActual}件
+            </Link>
+          </dd>
+        </div>
+        <div>
+          <dt>未申請の実績</dt>
+          <dd>
+            <Link href="/attendance?overtimeStatus=unapproved_actual">
+              {summary.overtimeReconciliations.unapprovedActual}件
+            </Link>
+          </dd>
+        </div>
+        <div>
           <dt>今月の休暇</dt>
           <dd>
             <Link href="/attendance?status=leave">{summary.leaveDays}日</Link>

@@ -16,6 +16,7 @@ import {
   workCalendarPatterns,
   workRules,
 } from "@/lib/db/schema";
+import { overtimeReconciliationsForMonth } from "@/lib/overtime-reconciliation";
 
 export type AttendanceOperationStatus =
   | "absence"
@@ -32,6 +33,7 @@ export type OperationalAttendanceDay = Readonly<{
   attendanceDayId: string | null;
   attendanceStatus: "complete" | "open" | null;
   breakMinutes: number | null;
+  calendarDayKind: "non_workday" | "workday";
   calendarLabel: string;
   calendarSource: string;
   displayName: string;
@@ -43,6 +45,20 @@ export type OperationalAttendanceDay = Readonly<{
   leaveUnits: number | null;
   operationalStatus: AttendanceOperationStatus;
   overtimeMinutes: number | null;
+  overtimeActualMinutes: number | null;
+  overtimeBlockClose: boolean;
+  overtimeDifferenceMinutes: number | null;
+  overtimePolicyId: string | null;
+  overtimeReconciliationStatus:
+    | "exceeded_request"
+    | "no_actual"
+    | "unapproved_actual"
+    | "under_request"
+    | "within_request"
+    | null;
+  overtimeRequestIds: string[];
+  overtimeRequestKind: "holiday_work" | "overtime" | null;
+  overtimeRequestedMinutes: number | null;
   scheduledMinutes: number;
   workedMinutes: number | null;
   workDate: string;
@@ -319,6 +335,7 @@ export async function projectOperationalAttendanceMonth(
         attendanceDayId: attendance?.id ?? null,
         attendanceStatus: attendance?.status ?? null,
         breakMinutes: attendance?.breakMinutes ?? null,
+        calendarDayKind: workday ? "workday" : "non_workday",
         calendarLabel,
         calendarSource,
         displayName: employee.displayName,
@@ -330,6 +347,14 @@ export async function projectOperationalAttendanceMonth(
         leaveUnits: leave?.units ?? null,
         operationalStatus,
         overtimeMinutes: attendance?.overtimeMinutes ?? null,
+        overtimeActualMinutes: null,
+        overtimeBlockClose: false,
+        overtimeDifferenceMinutes: null,
+        overtimePolicyId: null,
+        overtimeReconciliationStatus: null,
+        overtimeRequestIds: [],
+        overtimeRequestKind: null,
+        overtimeRequestedMinutes: null,
         scheduledMinutes:
           calendarSource === "inactive_calendar"
             ? (attendance?.scheduledMinutes ?? 0)
@@ -343,7 +368,27 @@ export async function projectOperationalAttendanceMonth(
       });
     }
   }
-  return projected;
+  const reconciliations = await overtimeReconciliationsForMonth(db, {
+    days: projected,
+    month: input.month,
+    organizationId: input.organizationId,
+  });
+  return projected.map((day) => {
+    const reconciliation = reconciliations.get(`${day.employeeId}:${day.workDate}`);
+    return reconciliation
+      ? {
+          ...day,
+          overtimeActualMinutes: reconciliation.actualMinutes,
+          overtimeBlockClose: reconciliation.blockClose,
+          overtimeDifferenceMinutes: reconciliation.differenceMinutes,
+          overtimePolicyId: reconciliation.policyId,
+          overtimeReconciliationStatus: reconciliation.status,
+          overtimeRequestIds: reconciliation.requestIds,
+          overtimeRequestKind: reconciliation.kind,
+          overtimeRequestedMinutes: reconciliation.requestedMinutes,
+        }
+      : day;
+  });
 }
 
 export async function projectOperationalAttendanceDay(

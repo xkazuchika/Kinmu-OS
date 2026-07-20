@@ -4,11 +4,12 @@ import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   Ref,
+  RefObject,
   ReactNode,
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 function classes(...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -164,6 +165,7 @@ export function ConfirmDialog({
   onCancel,
   onConfirm,
   open,
+  returnFocusRef,
   title,
 }: {
   children: ReactNode;
@@ -172,6 +174,7 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
   open: boolean;
+  returnFocusRef?: RefObject<HTMLElement | null>;
   title: string;
 }) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
@@ -181,11 +184,13 @@ export function ConfirmDialog({
     onCancelRef.current = onCancel;
   }, [onCancel]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) {
       return;
     }
 
+    const previouslyFocused =
+      returnFocusRef?.current ?? (document.activeElement as HTMLElement | null);
     cancelButtonRef.current?.focus();
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -214,8 +219,11 @@ export function ConfirmDialog({
     };
     document.addEventListener("keydown", closeOnEscape);
 
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [open]);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      previouslyFocused?.focus();
+    };
+  }, [open, returnFocusRef]);
 
   if (!open) {
     return null;

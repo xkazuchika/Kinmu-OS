@@ -287,7 +287,7 @@ describeDatabase("monthly attendance closing", () => {
     expect(exportedCsv).toContain("勤務 花子");
     expect(exportedCsv).not.toContain("変更後の氏名");
     expect(exportedCsv).toContain("締め済み");
-    expect(exportedCsv).toContain(",1\r\n");
+    expect(exportedCsv).toContain(",1,業務確認用であり");
 
     await expect(
       reopenAttendanceMonth(client.db, data.managerActor, {

@@ -36,6 +36,19 @@ type Attendance = {
     | "unresolved"
     | "worked";
   overtimeMinutes: number | null;
+  overtimeActualMinutes: number | null;
+  overtimeApplicationIds: string[];
+  overtimeApplicationKinds: Array<"holiday_work" | "overtime">;
+  overtimeApplicationStatuses: Array<"approved" | "cancelled" | "pending" | "rejected">;
+  overtimeDifferenceMinutes: number | null;
+  overtimeReconciliationStatus:
+    | "exceeded_request"
+    | "no_actual"
+    | "unapproved_actual"
+    | "under_request"
+    | "within_request"
+    | null;
+  overtimeRequestedMinutes: number | null;
   scheduledMinutes: number;
   status: "complete" | "open";
   workDate: string;
@@ -48,6 +61,10 @@ type Closing = {
     openDays: number;
     pendingCorrections: number;
     pendingLeaveRequests: number;
+    pendingOvertimeRequests: number;
+    overtimeExceededRequests: number;
+    overtimeNoActual: number;
+    overtimeUnapprovedActual: number;
     unresolvedDays: number;
   };
   canClose: boolean;
@@ -83,6 +100,19 @@ const operationalStatusLabels: Record<Attendance["operationalStatus"], string> =
   unresolved: "未解決",
   worked: "勤務済み",
 };
+const requestStatusLabels = {
+  approved: "承認済み",
+  cancelled: "取消済み",
+  pending: "審査待ち",
+  rejected: "却下",
+} as const;
+const reconciliationLabels = {
+  exceeded_request: "申請超過",
+  no_actual: "実績なし",
+  unapproved_actual: "未申請の実績",
+  under_request: "申請未満",
+  within_request: "申請内",
+} as const;
 
 export default function AttendanceManagementPage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
@@ -97,19 +127,30 @@ export default function AttendanceManagementPage() {
   const [submitting, setSubmitting] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [selectedStatus, setSelectedStatus] = useState("");
+  const [selectedRequestStatus, setSelectedRequestStatus] = useState("");
+  const [selectedOvertimeStatus, setSelectedOvertimeStatus] = useState("");
   async function load(
     event?: FormEvent<HTMLFormElement>,
     month = selectedMonth,
     status = selectedStatus,
+    requestStatus = selectedRequestStatus,
+    overtimeStatus = selectedOvertimeStatus,
   ) {
     event?.preventDefault();
     const parameters = event
       ? new URLSearchParams(
           Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>,
         )
-      : new URLSearchParams({ month, ...(status ? { status } : {}) });
+      : new URLSearchParams({
+          month,
+          ...(overtimeStatus ? { overtimeStatus } : {}),
+          ...(requestStatus ? { requestStatus } : {}),
+          ...(status ? { status } : {}),
+        });
     setSelectedMonth(parameters.get("month") ?? currentMonth);
     setSelectedStatus(parameters.get("status") ?? "");
+    setSelectedRequestStatus(parameters.get("requestStatus") ?? "");
+    setSelectedOvertimeStatus(parameters.get("overtimeStatus") ?? "");
     const [attendanceResponse, departmentResponse, employeeResponse, closingResponse] =
       await Promise.all([
         fetch(`/api/attendance?${parameters}`),
@@ -138,7 +179,12 @@ export default function AttendanceManagementPage() {
     const parameters = new URLSearchParams(window.location.search);
     const month = parameters.get("month") ?? currentMonth;
     const status = parameters.get("status") ?? "";
-    const timer = window.setTimeout(() => void load(undefined, month, status), 0);
+    const requestStatus = parameters.get("requestStatus") ?? "";
+    const overtimeStatus = parameters.get("overtimeStatus") ?? "";
+    const timer = window.setTimeout(
+      () => void load(undefined, month, status, requestStatus, overtimeStatus),
+      0,
+    );
     return () => window.clearTimeout(timer);
     // URLの初期条件だけを初回表示時に反映する。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -167,7 +213,13 @@ export default function AttendanceManagementPage() {
     setSuccess(dialog === "close" ? "月次勤怠を締めました。" : "月次勤怠を再開しました。");
     setDialog(undefined);
     setReopenReason("");
-    await load(undefined, closing.month);
+    await load(
+      undefined,
+      closing.month,
+      selectedStatus,
+      selectedRequestStatus,
+      selectedOvertimeStatus,
+    );
   }
   return (
     <main className="registry-page">
@@ -216,6 +268,33 @@ export default function AttendanceManagementPage() {
             <option value="leave">休暇のみ</option>
             <option value="absence">欠勤のみ</option>
             <option value="conflict">日区分の競合のみ</option>
+          </SelectField>
+          <SelectField
+            id="attendance-filter-request-status"
+            label="残業申請"
+            name="requestStatus"
+            onChange={(event) => setSelectedRequestStatus(event.target.value)}
+            value={selectedRequestStatus}
+          >
+            <option value="">すべて</option>
+            <option value="pending">審査待ち</option>
+            <option value="approved">承認済み</option>
+            <option value="rejected">却下</option>
+            <option value="cancelled">取消済み</option>
+          </SelectField>
+          <SelectField
+            id="attendance-filter-overtime-status"
+            label="実績差異"
+            name="overtimeStatus"
+            onChange={(event) => setSelectedOvertimeStatus(event.target.value)}
+            value={selectedOvertimeStatus}
+          >
+            <option value="">すべて</option>
+            <option value="within_request">申請内</option>
+            <option value="under_request">申請未満</option>
+            <option value="exceeded_request">申請超過</option>
+            <option value="no_actual">実績なし</option>
+            <option value="unapproved_actual">未申請の実績</option>
           </SelectField>
           <Button type="submit" variant="secondary">
             表示
@@ -283,6 +362,19 @@ export default function AttendanceManagementPage() {
                   <dd>{closing.blockers.pendingLeaveRequests}件</dd>
                 </div>
                 <div>
+                  <dt>審査待ち残業</dt>
+                  <dd>{closing.blockers.pendingOvertimeRequests}件</dd>
+                </div>
+                <div>
+                  <dt>締め阻害の残業差異</dt>
+                  <dd>
+                    {closing.blockers.overtimeExceededRequests +
+                      closing.blockers.overtimeNoActual +
+                      closing.blockers.overtimeUnapprovedActual}
+                    件
+                  </dd>
+                </div>
+                <div>
                   <dt>未解決</dt>
                   <dd>{closing.blockers.unresolvedDays}件</dd>
                 </div>
@@ -304,6 +396,24 @@ export default function AttendanceManagementPage() {
               ) : null}
               {closing.blockers.pendingLeaveRequests ? (
                 <Link href="/leave/reviews?status=pending">審査待ち休暇を確認</Link>
+              ) : null}
+              {closing.blockers.pendingOvertimeRequests ? (
+                <Link href="/overtime/reviews?status=pending">審査待ち残業を確認</Link>
+              ) : null}
+              {closing.blockers.overtimeExceededRequests ? (
+                <Link href={`/attendance?month=${closing.month}&overtimeStatus=exceeded_request`}>
+                  申請超過を確認
+                </Link>
+              ) : null}
+              {closing.blockers.overtimeNoActual ? (
+                <Link href={`/attendance?month=${closing.month}&overtimeStatus=no_actual`}>
+                  実績なしを確認
+                </Link>
+              ) : null}
+              {closing.blockers.overtimeUnapprovedActual ? (
+                <Link href={`/attendance?month=${closing.month}&overtimeStatus=unapproved_actual`}>
+                  未申請の実績を確認
+                </Link>
               ) : null}
               {closing.blockers.unresolvedDays ? (
                 <Link href={`/attendance?month=${closing.month}&status=unresolved`}>
@@ -343,6 +453,8 @@ export default function AttendanceManagementPage() {
               <th>実労働</th>
               <th>所定</th>
               <th>残業</th>
+              <th>残業申請</th>
+              <th>実績差異</th>
               <th>確認</th>
             </tr>
           </thead>
@@ -365,8 +477,39 @@ export default function AttendanceManagementPage() {
                 <td>{minutes(day.scheduledMinutes)}</td>
                 <td>{minutes(day.overtimeMinutes)}</td>
                 <td>
-                  {day.operationalStatus === "unresolved" ||
-                  day.operationalStatus === "open_punch" ? (
+                  {day.overtimeApplicationIds.length
+                    ? day.overtimeApplicationStatuses
+                        .map((requestStatus) => requestStatusLabels[requestStatus])
+                        .join("、")
+                    : "—"}
+                  {day.overtimeRequestedMinutes !== null ? (
+                    <>
+                      <br />
+                      <small>承認申請 {minutes(day.overtimeRequestedMinutes)}</small>
+                    </>
+                  ) : null}
+                </td>
+                <td>
+                  {day.overtimeReconciliationStatus
+                    ? reconciliationLabels[day.overtimeReconciliationStatus]
+                    : "—"}
+                  {day.overtimeDifferenceMinutes !== null ? (
+                    <>
+                      <br />
+                      <small>
+                        実績 {minutes(day.overtimeActualMinutes)}・差分{" "}
+                        {day.overtimeDifferenceMinutes}分
+                      </small>
+                    </>
+                  ) : null}
+                </td>
+                <td>
+                  {day.overtimeApplicationIds.length ? (
+                    <Link href={`/overtime/reviews?requestId=${day.overtimeApplicationIds[0]}`}>
+                      残業申請を確認
+                    </Link>
+                  ) : day.operationalStatus === "unresolved" ||
+                    day.operationalStatus === "open_punch" ? (
                     <Link href="/attendance/corrections">勤怠申請を確認</Link>
                   ) : day.operationalStatus === "conflict" ? (
                     <Link href="/leave/reviews">休暇審査を確認</Link>

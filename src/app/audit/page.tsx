@@ -50,6 +50,13 @@ const actions = [
   "attendance_month_closed",
   "attendance_month_reopened",
   "attendance_month_reclosed",
+  "overtime_policy_created",
+  "overtime_policy_activated",
+  "overtime_policy_changed",
+  "overtime_request_submitted",
+  "overtime_request_cancelled",
+  "overtime_request_approved",
+  "overtime_request_rejected",
   "csv_imported",
   "csv_exported",
 ];
@@ -90,6 +97,13 @@ export default function AuditPage() {
           </SelectField>
           <Field id="audit-actor" label="操作者ID" name="actorUserId" />
           <Field id="audit-entity" label="対象従業員・対象ID" name="entityId" />
+          <Field id="audit-employee" label="対象従業員ID" name="employeeId" />
+          <Field id="audit-month" label="対象月" name="targetMonth" type="month" />
+          <SelectField id="audit-overtime-kind" label="残業申請区分" name="overtimeRequestKind">
+            <option value="">すべて</option>
+            <option value="overtime">残業</option>
+            <option value="holiday_work">休日出勤</option>
+          </SelectField>
           <Button type="submit" variant="secondary">
             検索
           </Button>

@@ -10,13 +10,19 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const from = url.searchParams.get("from");
     const to = url.searchParams.get("to");
+    const requestedKind = url.searchParams.get("overtimeRequestKind");
+    const overtimeRequestKind =
+      requestedKind === "overtime" || requestedKind === "holiday_work" ? requestedKind : undefined;
     return Response.json({
       logs: await searchAuditLogs(database, {
         action: url.searchParams.get("action") || undefined,
         actorUserId: url.searchParams.get("actorUserId") || undefined,
+        employeeId: url.searchParams.get("employeeId") || undefined,
         entityId: url.searchParams.get("entityId") || undefined,
         from: from ? new Date(`${from}T00:00:00Z`) : undefined,
         organizationId: actor.organizationId,
+        overtimeRequestKind,
+        targetMonth: url.searchParams.get("targetMonth") || undefined,
         to: to ? new Date(`${to}T23:59:59.999Z`) : undefined,
       }),
     });

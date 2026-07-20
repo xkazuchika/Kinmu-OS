@@ -45,6 +45,17 @@ export type CorrectionDay = {
     | "unresolved"
     | "worked";
   overtimeMinutes: number | null;
+  overtimeActualMinutes?: number | null;
+  overtimeDifferenceMinutes?: number | null;
+  overtimeReconciliationStatus?:
+    | "exceeded_request"
+    | "no_actual"
+    | "unapproved_actual"
+    | "under_request"
+    | "within_request"
+    | null;
+  overtimeRequestIds?: string[];
+  overtimeRequestedMinutes?: number | null;
   scheduledMinutes: number;
   status: "complete" | "open";
   workDate: string;
@@ -75,6 +86,14 @@ const statusLabels: Record<CorrectionStatus, string> = {
   pending: "審査待ち",
   rejected: "却下",
 };
+
+const overtimeStatusLabels = {
+  exceeded_request: "申請超過",
+  no_actual: "実績なし",
+  unapproved_actual: "未申請の実績",
+  under_request: "申請未満",
+  within_request: "申請内",
+} as const;
 
 function dateTimeInZone(iso: string, timezone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -335,7 +354,21 @@ export function AttendanceCorrectionPanel({
                   <dt>残業</dt>
                   <dd>{hours(day.overtimeMinutes)}</dd>
                 </div>
+                {day.overtimeReconciliationStatus ? (
+                  <div>
+                    <dt>申請との差異</dt>
+                    <dd>
+                      {overtimeStatusLabels[day.overtimeReconciliationStatus]}（申請{" "}
+                      {hours(day.overtimeRequestedMinutes ?? null)}・実績{" "}
+                      {hours(day.overtimeActualMinutes ?? null)}・差分{" "}
+                      {day.overtimeDifferenceMinutes ?? 0}分）
+                    </dd>
+                  </div>
+                ) : null}
               </dl>
+              {day.overtimeRequestIds?.length ? (
+                <Link href="/overtime">残業・休日出勤申請を確認</Link>
+              ) : null}
             </article>
           ))}
         </div>

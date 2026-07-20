@@ -15,6 +15,7 @@ import {
   employees,
   leaveRequestDays,
   leaveRequests,
+  overtimeWorkRequests,
   organizations,
 } from "@/lib/db/schema";
 import { assertEmployeeCanPunch } from "@/lib/employees";
@@ -176,6 +177,10 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
         id: row.attendanceDayId ?? row.id,
         isCorrected: row.isCorrected,
         absenceReason: row.absenceReason,
+        calendarDayKind:
+          row.overtimeRequestKind === "holiday_work" || row.scheduledMinutes === 0
+            ? ("non_workday" as const)
+            : ("workday" as const),
         calendarLabel: row.calendarLabel ?? "締め時の勤務予定",
         calendarSource: row.calendarSource ?? "closed_snapshot",
         leaveScheduledMinutes: row.leaveScheduledMinutes,
@@ -185,6 +190,14 @@ export async function getMonthlyAttendance(db: AppDatabase, actor: SessionActor,
         operationalStatus:
           row.operationalStatus ?? (row.status === "open" ? "open_punch" : "worked"),
         overtimeMinutes: row.overtimeMinutes,
+        overtimeActualMinutes: row.overtimeActualMinutes,
+        overtimeBlockClose: false,
+        overtimeDifferenceMinutes: row.overtimeDifferenceMinutes,
+        overtimePolicyId: row.overtimePolicyId,
+        overtimeReconciliationStatus: row.overtimeReconciliationStatus,
+        overtimeRequestIds: row.overtimeRequestIds,
+        overtimeRequestKind: row.overtimeRequestKind,
+        overtimeRequestedMinutes: row.overtimeRequestedMinutes,
         scheduledMinutes: row.scheduledMinutes,
         status: row.status,
         workDate: row.workDate,
@@ -335,14 +348,55 @@ export async function listManagedAttendance(
     month: string;
     openOnly?: boolean;
     operationalStatuses?: AttendanceOperationStatus[];
+    overtimeRequestStatuses?: Array<"approved" | "cancelled" | "pending" | "rejected">;
+    overtimeReconciliationStatuses?: Array<
+      "exceeded_request" | "no_actual" | "unapproved_actual" | "under_request" | "within_request"
+    >;
     organizationId: string;
   },
 ) {
+  const range = monthRange(input.month);
+  const requestRows = await db
+    .select({
+      employeeId: overtimeWorkRequests.employeeId,
+      id: overtimeWorkRequests.id,
+      kind: overtimeWorkRequests.kind,
+      status: overtimeWorkRequests.status,
+      workDate: overtimeWorkRequests.workDate,
+    })
+    .from(overtimeWorkRequests)
+    .where(
+      and(
+        eq(overtimeWorkRequests.organizationId, input.organizationId),
+        gte(overtimeWorkRequests.workDate, range.from),
+        lt(overtimeWorkRequests.workDate, range.to),
+      ),
+    )
+    .orderBy(asc(overtimeWorkRequests.createdAt));
+  const requestsByDay = new Map<string, Array<(typeof requestRows)[number]>>();
+  for (const request of requestRows) {
+    const key = `${request.employeeId}:${request.workDate}`;
+    requestsByDay.set(key, [...(requestsByDay.get(key) ?? []), request]);
+  }
+  const requestSummary = (employeeId: string, workDate: string) => {
+    const requests = requestsByDay.get(`${employeeId}:${workDate}`) ?? [];
+    return {
+      overtimeApplicationIds: requests.map((request) => request.id),
+      overtimeApplicationKinds: [...new Set(requests.map((request) => request.kind))],
+      overtimeApplicationStatuses: [...new Set(requests.map((request) => request.status))],
+    };
+  };
+  const matchesRequestStatus = (employeeId: string, workDate: string) =>
+    !input.overtimeRequestStatuses?.length ||
+    (requestsByDay.get(`${employeeId}:${workDate}`) ?? []).some((request) =>
+      input.overtimeRequestStatuses?.includes(request.status),
+    );
   const closed = await listClosedAttendanceSnapshots(db, input.organizationId, input.month);
   if (closed) {
     return closed.rows
       .filter((row) => !input.departmentId || row.departmentId === input.departmentId)
       .filter((row) => !input.employeeId || row.employeeId === input.employeeId)
+      .filter((row) => matchesRequestStatus(row.employeeId, row.workDate))
       .filter((row) => !input.openOnly || row.status === "open")
       .filter(
         (row) =>
@@ -350,15 +404,26 @@ export async function listManagedAttendance(
           (row.operationalStatus !== null &&
             input.operationalStatuses.includes(row.operationalStatus)),
       )
+      .filter(
+        (row) =>
+          !input.overtimeReconciliationStatuses?.length ||
+          (row.overtimeReconciliationStatus !== null &&
+            input.overtimeReconciliationStatuses.includes(row.overtimeReconciliationStatus)),
+      )
       .slice()
       .reverse()
       .map((row) => ({
+        ...requestSummary(row.employeeId, row.workDate),
         departmentName: row.departmentName ?? "—",
         displayName: row.displayName,
         employeeNumber: row.employeeNumber,
         employeeId: row.employeeId,
         isCorrected: row.isCorrected,
         absenceReason: row.absenceReason,
+        calendarDayKind:
+          row.overtimeRequestKind === "holiday_work" || row.scheduledMinutes === 0
+            ? ("non_workday" as const)
+            : ("workday" as const),
         calendarLabel: row.calendarLabel ?? "締め時の勤務予定",
         calendarSource: row.calendarSource ?? "closed_snapshot",
         leaveScheduledMinutes: row.leaveScheduledMinutes,
@@ -368,6 +433,14 @@ export async function listManagedAttendance(
         operationalStatus:
           row.operationalStatus ?? (row.status === "open" ? "open_punch" : "worked"),
         overtimeMinutes: row.overtimeMinutes,
+        overtimeActualMinutes: row.overtimeActualMinutes,
+        overtimeBlockClose: false,
+        overtimeDifferenceMinutes: row.overtimeDifferenceMinutes,
+        overtimePolicyId: row.overtimePolicyId,
+        overtimeReconciliationStatus: row.overtimeReconciliationStatus,
+        overtimeRequestIds: row.overtimeRequestIds,
+        overtimeRequestKind: row.overtimeRequestKind,
+        overtimeRequestedMinutes: row.overtimeRequestedMinutes,
         scheduledMinutes: row.scheduledMinutes,
         status: row.status,
         workDate: row.workDate,
@@ -427,8 +500,16 @@ export async function listManagedAttendance(
         !input.operationalStatuses?.length ||
         input.operationalStatuses.includes(day.operationalStatus),
     )
+    .filter(
+      (day) =>
+        !input.overtimeReconciliationStatuses?.length ||
+        (day.overtimeReconciliationStatus !== null &&
+          input.overtimeReconciliationStatuses.includes(day.overtimeReconciliationStatus)),
+    )
+    .filter((day) => matchesRequestStatus(day.employeeId, day.workDate))
     .map((day) => ({
       ...day,
+      ...requestSummary(day.employeeId, day.workDate),
       departmentName: affiliationByEmployee.get(day.employeeId)?.departmentName ?? "—",
       isCorrected: day.attendanceDayId ? corrected.has(day.attendanceDayId) : false,
       status:

@@ -57,8 +57,37 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
         return Response.json({ error: "対象月が正しくありません。" }, { status: 422 });
       const closed = await listClosedAttendanceSnapshots(database, actor.organizationId, month);
+      const requestStatusValue = url.searchParams.get("requestStatus");
+      const requestStatuses = ["approved", "cancelled", "pending", "rejected"] as const;
+      const requestStatus = requestStatusValue
+        ? requestStatuses.find((candidate) => candidate === requestStatusValue)
+        : undefined;
+      if (requestStatusValue && !requestStatus) {
+        return Response.json({ error: "残業申請の状態が正しくありません。" }, { status: 422 });
+      }
+      const overtimeStatusValue = url.searchParams.get("overtimeStatus");
+      const overtimeStatuses = [
+        "exceeded_request",
+        "no_actual",
+        "unapproved_actual",
+        "under_request",
+        "within_request",
+      ] as const;
+      const overtimeStatus = overtimeStatusValue
+        ? overtimeStatuses.find((candidate) => candidate === overtimeStatusValue)
+        : undefined;
+      if (overtimeStatusValue && !overtimeStatus) {
+        return Response.json(
+          { error: "残業申請の実績差異状態が正しくありません。" },
+          { status: 422 },
+        );
+      }
       const rows = await listManagedAttendance(database, {
+        departmentId: url.searchParams.get("departmentId") || undefined,
+        employeeId: url.searchParams.get("employeeId") || undefined,
         month,
+        overtimeRequestStatuses: requestStatus ? [requestStatus] : undefined,
+        overtimeReconciliationStatuses: overtimeStatus ? [overtimeStatus] : undefined,
         organizationId: actor.organizationId,
       });
       content = csv([
@@ -70,6 +99,13 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           "実労働分",
           "所定分",
           "残業分",
+          "残業・休日出勤申請ID",
+          "申請区分",
+          "申請状態",
+          "申請分",
+          "実績比較分",
+          "差分",
+          "実績差異状態",
           "修正済み",
           "業務状態",
           "カレンダー根拠",
@@ -82,6 +118,7 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           "月次状態",
           "締め日時",
           "締めリビジョン",
+          "注意事項",
         ],
         ...rows.map((row) => [
           row.workDate,
@@ -91,6 +128,13 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           row.workedMinutes,
           row.scheduledMinutes,
           row.overtimeMinutes,
+          row.overtimeApplicationIds.join("|"),
+          row.overtimeApplicationKinds.join("|"),
+          row.overtimeApplicationStatuses.join("|"),
+          row.overtimeRequestedMinutes ?? "",
+          row.overtimeActualMinutes ?? "",
+          row.overtimeDifferenceMinutes ?? "",
+          row.overtimeReconciliationStatus ?? "",
           row.isCorrected ? "はい" : "いいえ",
           row.operationalStatus ?? "",
           row.calendarSource ?? "",
@@ -103,9 +147,18 @@ export async function GET(request: Request, context: { params: Promise<{ kind: s
           closed ? "締め済み" : "編集中",
           closed?.revision.closedAt.toISOString() ?? "",
           closed?.revision.revision ?? "",
+          "業務確認用であり、36協定・法定休日労働・割増賃金等の法令適合を自動判定しません。",
         ]),
       ]);
-      parameters = { kind, month, revision: closed?.revision.revision ?? null };
+      parameters = {
+        departmentId: url.searchParams.get("departmentId") || null,
+        employeeId: url.searchParams.get("employeeId") || null,
+        kind,
+        month,
+        requestStatus: requestStatus ?? null,
+        overtimeStatus: overtimeStatus ?? null,
+        revision: closed?.revision.revision ?? null,
+      };
     } else if (kind === "leave-ledger") {
       const from = url.searchParams.get("from") ?? undefined;
       const to = url.searchParams.get("to") ?? undefined;

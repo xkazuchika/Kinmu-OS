@@ -14,7 +14,7 @@ export type GuideEntry = Readonly<{
   title: string;
 }>;
 
-export const GUIDE_VERSION = "0.4.0";
+export const GUIDE_VERSION = "0.5.0";
 export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
@@ -65,6 +65,30 @@ export const guideCatalog = [
     roles: ["employee"],
     order: 30,
     file: "employee-attendance.md",
+  },
+  {
+    slug: "overtime-requests",
+    title: "残業・休日出勤申請",
+    description: "勤務予定を確認して申請し、取消、審査結果、実績差異を確認します。",
+    roles: ["owner", "hr_admin", "employee"],
+    order: 37,
+    file: "overtime-requests.md",
+  },
+  {
+    slug: "overtime-management",
+    title: "残業申請設定・審査・差異",
+    description: "適用日付きポリシー、単段階審査、実績差異、月次締め連携を管理します。",
+    roles: ["owner", "hr_admin"],
+    order: 38,
+    file: "overtime-management.md",
+  },
+  {
+    slug: "notifications",
+    title: "アプリ内通知",
+    description: "申請イベントの通知、未読・既読、権限変更後の安全な導線を確認します。",
+    roles: ["owner", "hr_admin", "employee"],
+    order: 39,
+    file: "notifications.md",
   },
   {
     slug: "attendance-corrections",
@@ -137,6 +161,8 @@ export function guidesForRole(role: GuideRole) {
   validateGuideCatalog();
   const preferred: Readonly<Record<GuideRole, readonly string[]>> = {
     employee: [
+      "overtime-requests",
+      "notifications",
       "leave-requests",
       "employee-attendance",
       "attendance-corrections",
@@ -148,6 +174,9 @@ export function guidesForRole(role: GuideRole) {
       "work-calendar",
       "leave-management",
       "leave-requests",
+      "overtime-management",
+      "overtime-requests",
+      "notifications",
       "attendance-corrections",
       "monthly-closing",
       "reports-and-audit",
@@ -159,6 +188,9 @@ export function guidesForRole(role: GuideRole) {
       "work-calendar",
       "leave-management",
       "leave-requests",
+      "overtime-management",
+      "overtime-requests",
+      "notifications",
       "attendance-corrections",
       "monthly-closing",
       "reports-and-audit",

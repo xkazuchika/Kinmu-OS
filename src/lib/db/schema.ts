@@ -72,6 +72,31 @@ export const attendanceOperationalStatus = pgEnum("attendance_operational_status
   "absence",
   "conflict",
 ]);
+export const overtimePolicyStatus = pgEnum("overtime_policy_status", [
+  "draft",
+  "active",
+  "inactive",
+]);
+export const overtimeRequestKind = pgEnum("overtime_request_kind", ["overtime", "holiday_work"]);
+export const overtimeRequestStatus = pgEnum("overtime_request_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "cancelled",
+]);
+export const overtimeReconciliationStatus = pgEnum("overtime_reconciliation_status", [
+  "within_request",
+  "under_request",
+  "exceeded_request",
+  "no_actual",
+  "unapproved_actual",
+]);
+export const notificationKind = pgEnum("notification_kind", [
+  "overtime_request_submitted",
+  "overtime_request_cancelled",
+  "overtime_request_approved",
+  "overtime_request_rejected",
+]);
 export const auditAction = pgEnum("audit_action", [
   "setup_completed",
   "login_succeeded",
@@ -104,6 +129,13 @@ export const auditAction = pgEnum("audit_action", [
   "leave_request_approved",
   "leave_request_rejected",
   "absence_changed",
+  "overtime_policy_created",
+  "overtime_policy_activated",
+  "overtime_policy_changed",
+  "overtime_request_submitted",
+  "overtime_request_cancelled",
+  "overtime_request_approved",
+  "overtime_request_rejected",
   "csv_imported",
   "csv_exported",
 ]);
@@ -835,6 +867,159 @@ export const dailyAttendanceSummaries = pgTable(
   (table) => [uniqueIndex("daily_attendance_summaries_day_unique").on(table.attendanceDayId)],
 );
 
+export const overtimeRequestPolicies = pgTable(
+  "overtime_request_policies",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    effectiveFrom: date("effective_from").notNull(),
+    status: overtimePolicyStatus("status").notNull().default("draft"),
+    minuteIncrement: integer("minute_increment").notNull().default(15),
+    requirePriorApproval: boolean("require_prior_approval").notNull().default(true),
+    allowedDeviationMinutes: integer("allowed_deviation_minutes").notNull().default(0),
+    blockCloseOnUnresolvedDifference: boolean("block_close_on_unresolved_difference")
+      .notNull()
+      .default(false),
+    version: integer("version").notNull().default(0),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    activatedByUserId: uuid("activated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "overtime_request_policies_minute_increment_valid",
+      sql`${table.minuteIncrement} IN (1, 5, 10, 15, 30)`,
+    ),
+    check(
+      "overtime_request_policies_allowed_deviation_nonnegative",
+      sql`${table.allowedDeviationMinutes} >= 0`,
+    ),
+    check("overtime_request_policies_version_nonnegative", sql`${table.version} >= 0`),
+    check(
+      "overtime_request_policies_activation_complete",
+      sql`(${table.status} = 'draft' AND ${table.activatedByUserId} IS NULL AND ${table.activatedAt} IS NULL) OR (${table.status} IN ('active', 'inactive') AND ${table.activatedByUserId} IS NOT NULL AND ${table.activatedAt} IS NOT NULL)`,
+    ),
+    uniqueIndex("overtime_request_policies_org_effective_unique").on(
+      table.organizationId,
+      table.effectiveFrom,
+    ),
+    index("overtime_request_policies_org_status_effective_idx").on(
+      table.organizationId,
+      table.status,
+      table.effectiveFrom,
+    ),
+  ],
+);
+
+export const overtimeWorkRequests = pgTable(
+  "overtime_work_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "cascade" }),
+    requestedByUserId: uuid("requested_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => overtimeRequestPolicies.id, { onDelete: "restrict" }),
+    kind: overtimeRequestKind("kind").notNull(),
+    workDate: date("work_date").notNull(),
+    plannedStartAt: timestamp("planned_start_at", { withTimezone: true }).notNull(),
+    plannedEndAt: timestamp("planned_end_at", { withTimezone: true }).notNull(),
+    plannedBreakMinutes: integer("planned_break_minutes").notNull().default(0),
+    plannedMinutes: integer("planned_minutes").notNull(),
+    reason: text("reason").notNull(),
+    workRuleSnapshot: jsonb("work_rule_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    calendarSnapshot: jsonb("calendar_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    status: overtimeRequestStatus("status").notNull().default("pending"),
+    version: integer("version").notNull().default(0),
+    reviewerUserId: uuid("reviewer_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    reviewComment: text("review_comment"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("overtime_work_requests_reason_not_blank", sql`length(trim(${table.reason})) > 0`),
+    check(
+      "overtime_work_requests_planned_range_valid",
+      sql`${table.plannedEndAt} > ${table.plannedStartAt} AND ${table.plannedEndAt} <= ${table.plannedStartAt} + interval '24 hours'`,
+    ),
+    check("overtime_work_requests_break_nonnegative", sql`${table.plannedBreakMinutes} >= 0`),
+    check("overtime_work_requests_minutes_positive", sql`${table.plannedMinutes} > 0`),
+    check("overtime_work_requests_version_nonnegative", sql`${table.version} >= 0`),
+    check(
+      "overtime_work_requests_status_details_valid",
+      sql`(${table.status} = 'pending' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'approved' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'rejected' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'cancelled' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NOT NULL)`,
+    ),
+    index("overtime_work_requests_org_status_created_idx").on(
+      table.organizationId,
+      table.status,
+      table.createdAt,
+    ),
+    index("overtime_work_requests_employee_date_idx").on(table.employeeId, table.workDate),
+    index("overtime_work_requests_org_date_kind_idx").on(
+      table.organizationId,
+      table.workDate,
+      table.kind,
+    ),
+  ],
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    recipientUserId: uuid("recipient_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: notificationKind("kind").notNull(),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("notifications_title_not_blank", sql`length(trim(${table.title})) > 0`),
+    check("notifications_summary_not_blank", sql`length(trim(${table.summary})) > 0`),
+    check("notifications_entity_type_not_blank", sql`length(trim(${table.entityType})) > 0`),
+    index("notifications_recipient_unread_created_idx").on(
+      table.organizationId,
+      table.recipientUserId,
+      table.readAt,
+      table.createdAt,
+    ),
+    index("notifications_entity_idx").on(table.organizationId, table.entityType, table.entityId),
+  ],
+);
+
 export const attendanceMonthPeriods = pgTable(
   "attendance_month_periods",
   {
@@ -946,6 +1131,15 @@ export const attendanceMonthDaySnapshots = pgTable(
     overtimeMinutes: integer("overtime_minutes"),
     workRuleId: uuid("work_rule_id").references(() => workRules.id, { onDelete: "restrict" }),
     workRuleName: text("work_rule_name"),
+    overtimePolicyId: uuid("overtime_policy_id").references(() => overtimeRequestPolicies.id, {
+      onDelete: "restrict",
+    }),
+    overtimeRequestIds: jsonb("overtime_request_ids").$type<string[]>().notNull().default([]),
+    overtimeRequestKind: overtimeRequestKind("overtime_request_kind"),
+    overtimeRequestedMinutes: integer("overtime_requested_minutes"),
+    overtimeActualMinutes: integer("overtime_actual_minutes"),
+    overtimeDifferenceMinutes: integer("overtime_difference_minutes"),
+    overtimeReconciliationStatus: overtimeReconciliationStatus("overtime_reconciliation_status"),
     isCorrected: boolean("is_corrected").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -957,6 +1151,14 @@ export const attendanceMonthDaySnapshots = pgTable(
     check(
       "attendance_month_snapshots_leave_minutes_nonnegative",
       sql`${table.leaveScheduledMinutes} IS NULL OR ${table.leaveScheduledMinutes} >= 0`,
+    ),
+    check(
+      "attendance_month_snapshots_overtime_requested_nonnegative",
+      sql`${table.overtimeRequestedMinutes} IS NULL OR ${table.overtimeRequestedMinutes} >= 0`,
+    ),
+    check(
+      "attendance_month_snapshots_overtime_actual_nonnegative",
+      sql`${table.overtimeActualMinutes} IS NULL OR ${table.overtimeActualMinutes} >= 0`,
     ),
     uniqueIndex("attendance_month_snapshots_revision_employee_date_unique").on(
       table.revisionId,

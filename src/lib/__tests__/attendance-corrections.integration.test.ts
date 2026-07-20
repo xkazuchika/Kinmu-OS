@@ -304,7 +304,9 @@ describeDatabase("attendance correction workflow", () => {
       { params: Promise.resolve({ kind: "attendance" }) },
     );
     expect(csvResponse.status).toBe(200);
-    expect(await csvResponse.text()).toContain("510,480,30,はい");
+    const csv = await csvResponse.text();
+    expect(csv).toContain("510,480,30,");
+    expect(csv).toContain("はい,worked");
     await expect(
       reviewAttendanceCorrection(client.db, data.managerActor, created.request.id, {
         decision: "approve",

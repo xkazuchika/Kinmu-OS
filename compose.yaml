@@ -7,7 +7,7 @@ services:
         condition: service_healthy
     environment:
       APP_URL: http://localhost:${APP_PORT:-3100}
-      APP_VERSION: ${APP_VERSION:-0.4.0}
+      APP_VERSION: ${APP_VERSION:-0.5.0}
       DATABASE_URL: postgresql://kinmu:kinmu@db:5432/kinmu
       NODE_ENV: production
       SESSION_SECRET: local-development-session-secret-change-me-123456

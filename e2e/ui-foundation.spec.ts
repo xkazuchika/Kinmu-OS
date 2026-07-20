@@ -1,8 +1,8 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 const owner = {
-  email: "owner.ui-test@example.com",
-  password: "OwnerUiTest-2026!",
+  email: process.env.E2E_OWNER_EMAIL ?? "owner.ui-test@example.com",
+  password: process.env.E2E_OWNER_PASSWORD ?? "OwnerUiTest-2026!",
 };
 const runId = `${Date.now().toString(36)}-${process.pid}`;
 const employee = {
@@ -694,7 +694,7 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   const articleHrefs = await page
     .locator(".guide-card")
     .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute("href")));
-  expect(articleHrefs).toHaveLength(10);
+  expect(articleHrefs).toHaveLength(13);
   for (const href of articleHrefs) {
     expect(href).toBeTruthy();
     const response = await page.goto(href!);
@@ -713,16 +713,189 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   await page.setViewportSize({ height: 720, width: 320 });
   await page.goto("/guide");
   await expect(page.getByText("ログイン中の役割: 従業員")).toBeVisible();
-  await expect(page.locator(".guide-card").first()).toContainText("休暇申請・審査・欠勤確定");
+  await expect(page.locator(".guide-card").first()).toContainText("残業・休日出勤申請");
   await page.locator(".guide-card").first().click();
-  await expect(page).toHaveURL(/\/guide\/leave-requests$/);
+  await expect(page).toHaveURL(/\/guide\/overtime-requests$/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
-  await expect(
-    page.getByRole("heading", { level: 1, name: "休暇申請・審査・欠勤確定" }),
-  ).toBeVisible();
-  await expect(page.getByLabel("現在地")).toContainText("休暇申請・審査・欠勤確定");
+  await expect(page.getByRole("heading", { level: 1, name: "残業・休日出勤申請" })).toBeVisible();
+  await expect(page.getByLabel("現在地")).toContainText("残業・休日出勤申請");
   await page.screenshot({ fullPage: true, path: "/tmp/kinmu-guide-mobile.png" });
   expect(consoleProblems.filter((problem) => !problem.includes("status of 404"))).toEqual([]);
+});
+
+test("employee overtime request, HR review, notification, and difference work at 320 pixels", async ({
+  page,
+}) => {
+  const consoleProblems = collectConsoleProblems(page);
+  const candidate = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000);
+
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const policiesResponse = await page.request.get("/api/overtime/policies");
+  const existingPolicyDates = new Set(
+    (
+      (await policiesResponse.json()) as { policies: Array<{ effectiveFrom: string }> }
+    ).policies.map((policy) => policy.effectiveFrom),
+  );
+  while (
+    candidate.getUTCDay() === 0 ||
+    candidate.getUTCDay() === 6 ||
+    existingPolicyDates.has(candidate.toISOString().slice(0, 10))
+  ) {
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+  }
+  const workDate = candidate.toISOString().slice(0, 10);
+  await page.goto("/overtime/settings");
+  await expect(page.getByRole("heading", { level: 1, name: "残業申請設定" })).toBeVisible();
+  await page.getByLabel("適用開始日").fill(workDate);
+  await page.getByLabel("時刻の入力単位").selectOption("15");
+  await page.getByLabel("実績差異の許容（分）").fill("15");
+  await page.getByRole("button", { exact: true, name: "ドラフトを保存" }).click();
+  await expect(page.getByText("残業申請設定をドラフト保存しました。")).toBeVisible();
+  await page.getByRole("button", { name: "影響を確認して有効化" }).click();
+  const policyDialog = page.getByRole("alertdialog", { name: "設定の影響を確認" });
+  await expect(policyDialog.getByText(/対象従業員/)).toBeVisible();
+  await policyDialog.getByRole("button", { name: "この設定を有効化" }).click();
+  await expect(page.getByText("残業申請設定を有効化しました。")).toBeVisible();
+
+  await login(page, employee.email, employee.password);
+  await page.setViewportSize({ height: 720, width: 320 });
+  await page.goto("/overtime");
+  await expect(page.getByRole("heading", { level: 1, name: "残業・休日出勤" })).toBeVisible();
+  await page.getByLabel("勤務日").fill(workDate);
+  await page.getByLabel("予定開始").fill("18:00");
+  await page.getByLabel("予定終了（翌日可）").fill("19:00");
+  await page.getByLabel("予定休憩（分）").fill("0");
+  await page.getByLabel("申請理由").fill("E2E残業申請の確認");
+  const headingLevels = await page
+    .locator("main h1, main h2, main h3")
+    .evaluateAll((headings) => headings.map((heading) => Number(heading.tagName.slice(1))));
+  expect(headingLevels[0]).toBe(1);
+  expect(
+    headingLevels.every((level, index) => index === 0 || level <= headingLevels[index - 1] + 1),
+  ).toBe(true);
+  const previewButton = page.getByRole("button", { name: "勤務予定と申請分数を確認" });
+  await previewButton.focus();
+  await page.keyboard.press("Enter");
+  const requestDialog = page.getByRole("alertdialog", { name: "申請内容を確認" });
+  await expect(requestDialog.getByText("60分")).toBeVisible();
+  const cancelRequestButton = requestDialog.getByRole("button", { name: "キャンセル" });
+  const submitRequestButton = requestDialog.getByRole("button", { name: "この内容で申請" });
+  await expect(cancelRequestButton).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(submitRequestButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(cancelRequestButton).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(requestDialog).toBeHidden();
+  await expect(previewButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(requestDialog).toBeVisible();
+  await page.keyboard.press("Shift+Tab");
+  await expect(submitRequestButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("残業・休日出勤申請を送信しました。")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v05-overtime-mobile.png" });
+
+  await login(page, hrAdmin.email, hrAdmin.password);
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await page.goto("/");
+  const pendingOvertimeSummary = page
+    .locator(".dashboard-summary > div")
+    .filter({ hasText: "審査待ち残業" });
+  const pendingOvertimeLink = pendingOvertimeSummary.getByRole("link");
+  await expect(pendingOvertimeLink).toHaveAttribute("href", "/overtime/reviews?status=pending");
+  await pendingOvertimeLink.click();
+  await expect(page).toHaveURL(/\/overtime\/reviews\?status=pending/);
+  const reviewItem = page
+    .locator(".review-list button")
+    .filter({ hasText: employee.employeeNumber })
+    .first();
+  await reviewItem.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("E2E残業申請の確認")).toBeVisible();
+  const reviewButton = page.getByRole("button", { name: "承認内容を確認" });
+  await reviewButton.focus();
+  await page.keyboard.press("Enter");
+  const reviewDialog = page.getByRole("alertdialog", { name: "この申請を承認しますか" });
+  await expect(reviewDialog.getByRole("button", { name: "キャンセル" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(reviewDialog.getByRole("button", { name: "申請を承認" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("申請を承認しました。")).toBeVisible();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v05-overtime-review-desktop.png" });
+
+  await login(page, employee.email, employee.password);
+  const correctionResponse = await page.request.post("/api/attendance/corrections", {
+    data: {
+      entries: [
+        { occurredAt: `${workDate}T00:00:00.000Z`, type: "clock_in" },
+        { occurredAt: `${workDate}T03:00:00.000Z`, type: "break_start" },
+        { occurredAt: `${workDate}T04:00:00.000Z`, type: "break_end" },
+        { occurredAt: `${workDate}T10:00:00.000Z`, type: "clock_out" },
+      ],
+      reason: "E2E残業申請と実績差異を確認するため",
+      workDate,
+    },
+  });
+  expect(correctionResponse.ok()).toBe(true);
+  const correction = (await correctionResponse.json()) as {
+    correction: { request: { id: string } };
+  };
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const correctionReview = await page.request.patch(
+    `/api/attendance/correction-reviews/${correction.correction.request.id}`,
+    { data: { decision: "approve" } },
+  );
+  expect(correctionReview.ok()).toBe(true);
+  await page.goto(`/attendance?month=${workDate.slice(0, 7)}&overtimeStatus=within_request`);
+  const reconciledRow = page
+    .getByRole("row")
+    .filter({ hasText: "従業員 花子" })
+    .filter({ hasText: workDate });
+  await expect(reconciledRow).toContainText("申請内");
+
+  const auditResponse = await page.request.get(
+    `/api/audit?action=overtime_request_approved&overtimeRequestKind=overtime&targetMonth=${workDate.slice(0, 7)}`,
+  );
+  expect(auditResponse.ok()).toBe(true);
+  const audit = (await auditResponse.json()) as {
+    logs: Array<{ action: string; metadata: { workDate?: string } }>;
+  };
+  expect(audit.logs).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        action: "overtime_request_approved",
+        metadata: expect.objectContaining({ workDate }),
+      }),
+    ]),
+  );
+
+  const attendanceCsv = await page.request.get(
+    `/api/exports/attendance?month=${workDate.slice(0, 7)}&requestStatus=approved&overtimeStatus=within_request`,
+  );
+  expect(attendanceCsv.ok()).toBe(true);
+  const csvText = await attendanceCsv.text();
+  expect(csvText.charCodeAt(0)).toBe(0xfeff);
+  expect(csvText).toContain("残業・休日出勤申請ID");
+  expect(csvText).toContain("実績差異状態");
+  expect(csvText).toContain("法令適合を自動判定しません");
+
+  await login(page, employee.email, employee.password);
+  await page.setViewportSize({ height: 720, width: 320 });
+  await page.goto("/notifications");
+  await expect(page.getByText("残業申請が承認されました").first()).toBeVisible();
+  const notificationButton = page.getByRole("button", { name: /残業申請が承認されました/ }).first();
+  await notificationButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/overtime\?requestId=/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  expect(consoleProblems).toEqual([]);
 });
