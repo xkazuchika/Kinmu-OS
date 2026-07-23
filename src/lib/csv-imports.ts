@@ -23,7 +23,7 @@ export class CsvImportValidationError extends Error {
   }
 }
 
-function parseCsv(csv: string) {
+export function parseCsv(csv: string) {
   const rows: string[][] = [];
   let field = "";
   let row: string[] = [];

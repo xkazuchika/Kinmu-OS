@@ -70,6 +70,11 @@ type Closing = {
   canClose: boolean;
   ended: boolean;
   month: string;
+  payrollExport: {
+    latestRunCount: number;
+    oldRevisionRunCount: number;
+    status: "generated" | "month_open" | "not_generated";
+  };
   period: {
     closedAt: string | null;
     closedBy: string | null;
@@ -324,12 +329,32 @@ export default function AttendanceManagementPage() {
             )}
           </div>
           {closing.period.status === "closed" ? (
-            <p>
-              リビジョン {closing.period.currentRevision} ・ {closing.period.closedBy} ・{" "}
-              {closing.period.closedAt
-                ? new Date(closing.period.closedAt).toLocaleString("ja-JP")
-                : ""}
-            </p>
+            <>
+              <p>
+                リビジョン {closing.period.currentRevision} ・ {closing.period.closedBy} ・{" "}
+                {closing.period.closedAt
+                  ? new Date(closing.period.closedAt).toLocaleString("ja-JP")
+                  : ""}
+              </p>
+              <div className="attendance-payroll-state">
+                <div>
+                  <strong>
+                    {closing.payrollExport.status === "generated"
+                      ? "給与連携CSV 出力済み"
+                      : "給与連携CSV 未生成"}
+                  </strong>
+                  <span>
+                    現在版 {closing.payrollExport.latestRunCount}件
+                    {closing.payrollExport.oldRevisionRunCount
+                      ? `・旧リビジョン ${closing.payrollExport.oldRevisionRunCount}件`
+                      : ""}
+                  </span>
+                </div>
+                <Link href={`/payroll-exports/inspect?month=${closing.month}`}>
+                  {closing.payrollExport.status === "generated" ? "出力を確認" : "全件検査へ"}
+                </Link>
+              </div>
+            </>
           ) : (
             <>
               <dl className="attendance-closing__summary">

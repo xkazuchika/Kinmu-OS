@@ -147,6 +147,16 @@ function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof manage
           </dd>
         </div>
       </dl>
+      <section className="home-section payroll-home-link">
+        <div>
+          <p>月次締めの次の仕事</p>
+          <h2>給与連携CSVを準備</h2>
+          <span>締め済み勤怠を全件検査し、再現可能なCSVとして出力します。</span>
+        </div>
+        <Link className="ui-button ui-button--secondary" href="/payroll-exports">
+          給与連携を開く
+        </Link>
+      </section>
       <section className="home-section">
         <h2>従業員別の残業</h2>
         {summary.overtime.length === 0 ? (

@@ -15,6 +15,12 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+import type {
+  PayrollExportProfileConfig,
+  PayrollExportRunManifest,
+  PayrollValidationSummary,
+} from "@/lib/payroll-export-types";
+
 export const userRole = pgEnum("user_role", ["owner", "hr_admin", "employee"]);
 export const userStatus = pgEnum("user_status", ["pending_setup", "active", "disabled"]);
 export const employeeStatus = pgEnum("employee_status", [
@@ -97,6 +103,14 @@ export const notificationKind = pgEnum("notification_kind", [
   "overtime_request_approved",
   "overtime_request_rejected",
 ]);
+export const payrollProfileStatus = pgEnum("payroll_profile_status", [
+  "draft",
+  "published",
+  "archived",
+]);
+export const payrollExportEncoding = pgEnum("payroll_export_encoding", ["utf8_bom", "cp932"]);
+export const payrollExportLineEnding = pgEnum("payroll_export_line_ending", ["crlf", "lf"]);
+export const payrollExportRunKind = pgEnum("payroll_export_run_kind", ["generated", "regenerated"]);
 export const auditAction = pgEnum("audit_action", [
   "setup_completed",
   "login_succeeded",
@@ -136,6 +150,19 @@ export const auditAction = pgEnum("audit_action", [
   "overtime_request_cancelled",
   "overtime_request_approved",
   "overtime_request_rejected",
+  "payroll_profile_created",
+  "payroll_profile_changed",
+  "payroll_profile_published",
+  "payroll_profile_archived",
+  "payroll_profile_imported",
+  "payroll_profile_exported",
+  "payroll_employee_mapping_changed",
+  "payroll_employee_mappings_imported",
+  "payroll_export_validated",
+  "payroll_export_generated",
+  "payroll_export_regenerated",
+  "payroll_export_downloaded",
+  "payroll_export_integrity_failed",
   "csv_imported",
   "csv_exported",
 ]);
@@ -1020,6 +1047,151 @@ export const notifications = pgTable(
   ],
 );
 
+export const payrollExportProfiles = pgTable(
+  "payroll_export_profiles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    draftConfig: jsonb("draft_config").$type<PayrollExportProfileConfig>().notNull(),
+    status: payrollProfileStatus("status").notNull().default("draft"),
+    version: integer("version").notNull().default(0),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    archivedByUserId: uuid("archived_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("payroll_export_profiles_name_not_blank", sql`length(trim(${table.name})) > 0`),
+    check("payroll_export_profiles_name_length", sql`length(${table.name}) <= 120`),
+    check("payroll_export_profiles_description_length", sql`length(${table.description}) <= 1000`),
+    check("payroll_export_profiles_version_nonnegative", sql`${table.version} >= 0`),
+    check(
+      "payroll_export_profiles_config_size",
+      sql`octet_length(${table.draftConfig}::text) <= 262144`,
+    ),
+    check(
+      "payroll_export_profiles_archive_complete",
+      sql`(${table.status} = 'archived' AND ${table.archivedAt} IS NOT NULL) OR (${table.status} <> 'archived' AND ${table.archivedAt} IS NULL AND ${table.archivedByUserId} IS NULL)`,
+    ),
+    uniqueIndex("payroll_export_profiles_org_name_active_unique")
+      .on(table.organizationId, table.name)
+      .where(sql`${table.status} <> 'archived'`),
+    index("payroll_export_profiles_org_status_updated_idx").on(
+      table.organizationId,
+      table.status,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const payrollExportProfileVersions = pgTable(
+  "payroll_export_profile_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    profileId: uuid("profile_id")
+      .notNull()
+      .references(() => payrollExportProfiles.id, { onDelete: "restrict" }),
+    version: integer("version").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    encoding: payrollExportEncoding("encoding").notNull(),
+    lineEnding: payrollExportLineEnding("line_ending").notNull(),
+    configSnapshot: jsonb("config_snapshot").$type<PayrollExportProfileConfig>().notNull(),
+    configHash: text("config_hash").notNull(),
+    publishedByUserId: uuid("published_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    publishedAt: timestamp("published_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("payroll_export_profile_versions_version_positive", sql`${table.version} > 0`),
+    check(
+      "payroll_export_profile_versions_schema_version_positive",
+      sql`${table.schemaVersion} > 0`,
+    ),
+    check(
+      "payroll_export_profile_versions_config_size",
+      sql`octet_length(${table.configSnapshot}::text) <= 262144`,
+    ),
+    check(
+      "payroll_export_profile_versions_hash_format",
+      sql`${table.configHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    uniqueIndex("payroll_export_profile_versions_profile_version_unique").on(
+      table.profileId,
+      table.version,
+    ),
+    index("payroll_export_profile_versions_org_profile_published_idx").on(
+      table.organizationId,
+      table.profileId,
+      table.publishedAt,
+    ),
+  ],
+);
+
+export const payrollEmployeeMappings = pgTable(
+  "payroll_employee_mappings",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    profileId: uuid("profile_id")
+      .notNull()
+      .references(() => payrollExportProfiles.id, { onDelete: "restrict" }),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "restrict" }),
+    externalEmployeeCode: text("external_employee_code").notNull(),
+    version: integer("version").notNull().default(0),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "payroll_employee_mappings_code_not_blank",
+      sql`length(trim(${table.externalEmployeeCode})) > 0`,
+    ),
+    check(
+      "payroll_employee_mappings_code_length",
+      sql`length(${table.externalEmployeeCode}) <= 128`,
+    ),
+    check("payroll_employee_mappings_version_nonnegative", sql`${table.version} >= 0`),
+    uniqueIndex("payroll_employee_mappings_org_profile_employee_unique").on(
+      table.organizationId,
+      table.profileId,
+      table.employeeId,
+    ),
+    uniqueIndex("payroll_employee_mappings_org_profile_code_unique").on(
+      table.organizationId,
+      table.profileId,
+      table.externalEmployeeCode,
+    ),
+    index("payroll_employee_mappings_org_profile_updated_idx").on(
+      table.organizationId,
+      table.profileId,
+      table.updatedAt,
+    ),
+  ],
+);
+
 export const attendanceMonthPeriods = pgTable(
   "attendance_month_periods",
   {
@@ -1170,6 +1342,69 @@ export const attendanceMonthDaySnapshots = pgTable(
       table.revisionId,
       table.employeeId,
     ),
+  ],
+);
+
+export const payrollExportRuns = pgTable(
+  "payroll_export_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    periodId: uuid("period_id")
+      .notNull()
+      .references(() => attendanceMonthPeriods.id, { onDelete: "restrict" }),
+    attendanceRevisionId: uuid("attendance_revision_id")
+      .notNull()
+      .references(() => attendanceMonthRevisions.id, { onDelete: "restrict" }),
+    profileVersionId: uuid("profile_version_id")
+      .notNull()
+      .references(() => payrollExportProfileVersions.id, { onDelete: "restrict" }),
+    kind: payrollExportRunKind("kind").notNull().default("generated"),
+    sourceRunId: uuid("source_run_id").references((): AnyPgColumn => payrollExportRuns.id, {
+      onDelete: "restrict",
+    }),
+    targetMonth: text("target_month").notNull(),
+    attendanceRevision: integer("attendance_revision").notNull(),
+    manifest: jsonb("manifest").$type<PayrollExportRunManifest>().notNull(),
+    validationSummary: jsonb("validation_summary").$type<PayrollValidationSummary>().notNull(),
+    generatorVersion: integer("generator_version").notNull(),
+    rowCount: integer("row_count").notNull(),
+    columnCount: integer("column_count").notNull(),
+    byteCount: integer("byte_count").notNull(),
+    sha256: text("sha256").notNull(),
+    generatedByUserId: uuid("generated_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("payroll_export_runs_month_format", sql`${table.targetMonth} ~ '^[0-9]{4}-[0-9]{2}$'`),
+    check("payroll_export_runs_attendance_revision_positive", sql`${table.attendanceRevision} > 0`),
+    check("payroll_export_runs_generator_version_positive", sql`${table.generatorVersion} > 0`),
+    check("payroll_export_runs_row_count_nonnegative", sql`${table.rowCount} >= 0`),
+    check("payroll_export_runs_column_count_positive", sql`${table.columnCount} > 0`),
+    check("payroll_export_runs_byte_count_positive", sql`${table.byteCount} > 0`),
+    check("payroll_export_runs_sha256_format", sql`${table.sha256} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "payroll_export_runs_manifest_size",
+      sql`octet_length(${table.manifest}::text) <= 1048576`,
+    ),
+    check(
+      "payroll_export_runs_regenerated_source",
+      sql`(${table.kind} = 'generated' AND ${table.sourceRunId} IS NULL) OR (${table.kind} = 'regenerated' AND ${table.sourceRunId} IS NOT NULL)`,
+    ),
+    index("payroll_export_runs_org_month_generated_idx").on(
+      table.organizationId,
+      table.targetMonth,
+      table.generatedAt,
+    ),
+    index("payroll_export_runs_revision_generated_idx").on(
+      table.attendanceRevisionId,
+      table.generatedAt,
+    ),
+    index("payroll_export_runs_profile_version_idx").on(table.profileVersionId),
   ],
 );
 

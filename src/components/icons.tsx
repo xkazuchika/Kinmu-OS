@@ -53,6 +53,14 @@ export function ReportIcon(props: IconProps) {
   );
 }
 
+export function PayrollIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 3h16v18H4zM8 7h8M8 11h3M8 15h3M15 11v4M13 13h4" {...stroke} />
+    </Icon>
+  );
+}
+
 export function ShieldIcon(props: IconProps) {
   return (
     <Icon {...props}>

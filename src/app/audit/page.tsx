@@ -57,6 +57,19 @@ const actions = [
   "overtime_request_cancelled",
   "overtime_request_approved",
   "overtime_request_rejected",
+  "payroll_profile_created",
+  "payroll_profile_changed",
+  "payroll_profile_published",
+  "payroll_profile_archived",
+  "payroll_profile_imported",
+  "payroll_profile_exported",
+  "payroll_employee_mapping_changed",
+  "payroll_employee_mappings_imported",
+  "payroll_export_validated",
+  "payroll_export_generated",
+  "payroll_export_regenerated",
+  "payroll_export_downloaded",
+  "payroll_export_integrity_failed",
   "csv_imported",
   "csv_exported",
 ];
@@ -99,6 +112,24 @@ export default function AuditPage() {
           <Field id="audit-entity" label="対象従業員・対象ID" name="entityId" />
           <Field id="audit-employee" label="対象従業員ID" name="employeeId" />
           <Field id="audit-month" label="対象月" name="targetMonth" type="month" />
+          <Field id="audit-payroll-profile" label="給与プロファイルID" name="profileId" />
+          <Field
+            id="audit-attendance-revision"
+            label="締めリビジョン"
+            min="1"
+            name="attendanceRevision"
+            type="number"
+          />
+          <Field id="audit-payroll-run" label="給与run ID" name="runId" />
+          <SelectField id="audit-validation-result" label="給与検査結果" name="validationResult">
+            <option value="">すべて</option>
+            <option value="passed">成功</option>
+            <option value="failed">要修正</option>
+          </SelectField>
+          <SelectField id="audit-payroll-only" label="給与連携操作" name="payrollOnly">
+            <option value="">すべての操作</option>
+            <option value="1">給与連携のみ</option>
+          </SelectField>
           <SelectField id="audit-overtime-kind" label="残業申請区分" name="overtimeRequestKind">
             <option value="">すべて</option>
             <option value="overtime">残業</option>

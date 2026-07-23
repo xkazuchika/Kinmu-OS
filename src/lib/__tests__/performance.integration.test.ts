@@ -19,10 +19,24 @@ import {
   organizations,
   overtimeRequestPolicies,
   overtimeWorkRequests,
+  payrollEmployeeMappings,
   users,
 } from "@/lib/db/schema";
 import { managementDashboard } from "@/lib/reporting";
 import { listNotifications } from "@/lib/notifications";
+import {
+  createDraftFromPublishedPayrollProfile,
+  createPayrollExportProfile,
+  publishPayrollExportProfile,
+  savePayrollExportProfileDraft,
+} from "@/lib/payroll-export-profiles";
+import {
+  generatePayrollExportRun,
+  inspectPayrollExport,
+  listPayrollExportRuns,
+  redownloadPayrollExportRun,
+} from "@/lib/payroll-export-runs";
+import type { PayrollExportProfileConfig } from "@/lib/payroll-export-types";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
@@ -214,8 +228,115 @@ describeDatabase("100 employee performance smoke", () => {
     const exportMs = performance.now() - exportStarted;
     const csv = await exported.text();
 
+    const payrollColumns: PayrollExportProfileConfig["columns"] = Array.from(
+      { length: 60 },
+      (_, index) =>
+        index === 0
+          ? {
+              formulaPolicy: "reject" as const,
+              header: "外部従業員コード",
+              id: "external_employee_code",
+              required: true,
+              source: { field: "external_employee_code", kind: "field" as const },
+              transform: { kind: "text" as const },
+            }
+          : {
+              formulaPolicy: "reject" as const,
+              header: `実働分${String(index).padStart(2, "0")}`,
+              id: `worked_minutes_${String(index).padStart(2, "0")}`,
+              required: true,
+              source: { field: "worked_minutes", kind: "field" as const },
+              transform: { kind: "minutes" as const },
+            },
+    );
+    const utf8Config: PayrollExportProfileConfig = {
+      columns: payrollColumns,
+      encoding: "utf8_bom",
+      fileNamePattern: "performance-{targetMonth}-r{revision}.csv",
+      lineEnding: "crlf",
+      schemaVersion: 1,
+    };
+    const profile = await createPayrollExportProfile(client.db, ownerActor, {
+      config: utf8Config,
+      name: "100名60列性能検証",
+    });
+    const utf8Published = await publishPayrollExportProfile(client.db, ownerActor, {
+      expectedVersion: profile.version,
+      profileId: profile.id,
+    });
+    const draft = await createDraftFromPublishedPayrollProfile(client.db, ownerActor, {
+      expectedVersion: utf8Published.profile.version,
+      profileId: profile.id,
+    });
+    const cp932Config: PayrollExportProfileConfig = { ...utf8Config, encoding: "cp932" };
+    const cp932Draft = await savePayrollExportProfileDraft(client.db, ownerActor, {
+      config: cp932Config,
+      expectedVersion: draft.version,
+      name: profile.name,
+      profileId: profile.id,
+    });
+    const cp932Published = await publishPayrollExportProfile(client.db, ownerActor, {
+      expectedVersion: cp932Draft.version,
+      profileId: profile.id,
+    });
+    await client.db.insert(payrollEmployeeMappings).values(
+      employeeRows.map((employee, index) => ({
+        employeeId: employee.id,
+        externalEmployeeCode: `PAY${String(index + 1).padStart(3, "0")}`,
+        organizationId: organization.id,
+        profileId: profile.id,
+        updatedByUserId: owner.id,
+      })),
+    );
+
+    const inspectUtf8Started = performance.now();
+    const utf8Inspection = await inspectPayrollExport(client.db, ownerActor, {
+      month: "2026-05",
+      page: 2,
+      pageSize: 25,
+      profileVersionId: utf8Published.publishedVersion.id,
+    });
+    const inspectUtf8Ms = performance.now() - inspectUtf8Started;
+    const mappingVersions = Object.fromEntries(
+      utf8Inspection.mappings.map((mapping) => [mapping.employeeId, mapping.mappingVersion]),
+    );
+    const generateUtf8Started = performance.now();
+    const utf8Run = await generatePayrollExportRun(client.db, ownerActor, {
+      confirmedWarningCodes: [],
+      expectedMappingVersions: mappingVersions,
+      expectedRevision: 1,
+      month: "2026-05",
+      profileVersionId: utf8Published.publishedVersion.id,
+    });
+    const generateUtf8Ms = performance.now() - generateUtf8Started;
+
+    const inspectCp932Started = performance.now();
+    const cp932Inspection = await inspectPayrollExport(client.db, ownerActor, {
+      month: "2026-05",
+      pageSize: 100,
+      profileVersionId: cp932Published.publishedVersion.id,
+    });
+    const inspectCp932Ms = performance.now() - inspectCp932Started;
+    const generateCp932Started = performance.now();
+    const cp932Run = await generatePayrollExportRun(client.db, ownerActor, {
+      confirmedWarningCodes: [],
+      expectedMappingVersions: Object.fromEntries(
+        cp932Inspection.mappings.map((mapping) => [mapping.employeeId, mapping.mappingVersion]),
+      ),
+      expectedRevision: 1,
+      month: "2026-05",
+      profileVersionId: cp932Published.publishedVersion.id,
+    });
+    const generateCp932Ms = performance.now() - generateCp932Started;
+    const historyStarted = performance.now();
+    const payrollHistory = await listPayrollExportRuns(client.db, ownerActor, "2026-05");
+    const historyMs = performance.now() - historyStarted;
+    const redownloadStarted = performance.now();
+    const redownloaded = await redownloadPayrollExportRun(client.db, ownerActor, utf8Run.run.id);
+    const redownloadMs = performance.now() - redownloadStarted;
+
     console.info(
-      `Performance smoke: attendance=${attendanceMs.toFixed(1)}ms dashboard=${dashboardMs.toFixed(1)}ms notifications=${notificationMs.toFixed(1)}ms closing=${closingMs.toFixed(1)}ms closed-list=${closedListMs.toFixed(1)}ms csv=${exportMs.toFixed(1)}ms`,
+      `Performance smoke: attendance=${attendanceMs.toFixed(1)}ms dashboard=${dashboardMs.toFixed(1)}ms notifications=${notificationMs.toFixed(1)}ms closing=${closingMs.toFixed(1)}ms closed-list=${closedListMs.toFixed(1)}ms csv=${exportMs.toFixed(1)}ms payroll-utf8-inspect=${inspectUtf8Ms.toFixed(1)}ms payroll-utf8-generate=${generateUtf8Ms.toFixed(1)}ms payroll-cp932-inspect=${inspectCp932Ms.toFixed(1)}ms payroll-cp932-generate=${generateCp932Ms.toFixed(1)}ms payroll-history=${historyMs.toFixed(1)}ms payroll-redownload=${redownloadMs.toFixed(1)}ms`,
     );
     expect(attendance).toHaveLength(3_100);
     expect(closedAttendance).toHaveLength(3_100);
@@ -231,5 +352,18 @@ describeDatabase("100 employee performance smoke", () => {
     expect(exportMs).toBeLessThan(3_000);
     expect(closingMs).toBeLessThan(3_000);
     expect(closedListMs).toBeLessThan(3_000);
-  }, 20_000);
+    expect(utf8Inspection).toMatchObject({ page: 2, pageCount: 4, totalRows: 100 });
+    expect(utf8Inspection.previewRows).toHaveLength(25);
+    expect(cp932Inspection).toMatchObject({ pageCount: 1, totalRows: 100 });
+    expect(utf8Run.run).toMatchObject({ columnCount: 60, rowCount: 100 });
+    expect(cp932Run.run).toMatchObject({ columnCount: 60, rowCount: 100 });
+    expect(payrollHistory).toHaveLength(2);
+    expect(redownloaded.bytes.equals(utf8Run.bytes)).toBe(true);
+    expect(inspectUtf8Ms).toBeLessThan(3_000);
+    expect(generateUtf8Ms).toBeLessThan(3_000);
+    expect(inspectCp932Ms).toBeLessThan(3_000);
+    expect(generateCp932Ms).toBeLessThan(3_000);
+    expect(historyMs).toBeLessThan(3_000);
+    expect(redownloadMs).toBeLessThan(3_000);
+  }, 30_000);
 });

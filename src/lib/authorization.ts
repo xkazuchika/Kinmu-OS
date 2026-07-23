@@ -10,6 +10,7 @@ export type Permission =
   | "calendar:manage"
   | "employees:manage"
   | "leave:manage"
+  | "payroll:manage"
   | "reports:read"
   | "self:read"
   | "self:write"
@@ -31,6 +32,7 @@ const permissionsByRole: Readonly<Record<SessionActor["role"], ReadonlySet<Permi
     "calendar:manage",
     "employees:manage",
     "leave:manage",
+    "payroll:manage",
     "reports:read",
     "self:read",
     "self:write",
@@ -42,6 +44,7 @@ const permissionsByRole: Readonly<Record<SessionActor["role"], ReadonlySet<Permi
     "calendar:manage",
     "employees:manage",
     "leave:manage",
+    "payroll:manage",
     "reports:read",
     "self:read",
     "self:write",

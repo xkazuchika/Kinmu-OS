@@ -37,7 +37,12 @@ describe("user guide catalog", () => {
         .map((guide) => guide.slug),
     ).toEqual(["admin-setup", "work-calendar", "leave-management"]);
     expect(guideCatalog.map((guide) => guide.slug)).toEqual(
-      expect.arrayContaining(["overtime-requests", "overtime-management", "notifications"]),
+      expect.arrayContaining([
+        "overtime-requests",
+        "overtime-management",
+        "notifications",
+        "payroll-exports",
+      ]),
     );
   });
 
@@ -61,6 +66,13 @@ describe("user guide catalog", () => {
     expect(overview).toContain("多段承認");
     expect(overview).toContain("代理申請");
     expect(overview).toContain("アプリ内通知");
+    expect(overview).toContain("給与連携CSV");
+    const payroll = await readFile(path.join(GUIDE_ROOT, "payroll-exports.md"), "utf8");
+    expect(payroll).toContain("CP932");
+    expect(payroll).toContain("SHA-256");
+    expect(payroll).toContain("設定JSON");
+    expect(payroll).toContain("更新前バックアップ");
+    expect(payroll).toContain("給与計算結果ではなく");
   });
 
   it("includes guide Markdown in the production standalone output", async () => {

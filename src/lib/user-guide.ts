@@ -14,7 +14,7 @@ export type GuideEntry = Readonly<{
   title: string;
 }>;
 
-export const GUIDE_VERSION = "0.5.0";
+export const GUIDE_VERSION = "0.6.0";
 export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
@@ -107,6 +107,14 @@ export const guideCatalog = [
     file: "monthly-closing.md",
   },
   {
+    slug: "payroll-exports",
+    title: "給与連携CSVの設定・検査・出力",
+    description: "プロファイル版、外部従業員コード、全件検査、runと再出力を管理します。",
+    roles: ["owner", "hr_admin"],
+    order: 55,
+    file: "payroll-exports.md",
+  },
+  {
     slug: "reports-and-audit",
     title: "レポート・CSV・監査ログ",
     description: "勤怠と残業の集計、CSV出力、操作履歴を確認します。",
@@ -179,6 +187,7 @@ export function guidesForRole(role: GuideRole) {
       "notifications",
       "attendance-corrections",
       "monthly-closing",
+      "payroll-exports",
       "reports-and-audit",
       "overview",
       "troubleshooting",
@@ -193,6 +202,7 @@ export function guidesForRole(role: GuideRole) {
       "notifications",
       "attendance-corrections",
       "monthly-closing",
+      "payroll-exports",
       "reports-and-audit",
       "overview",
       "troubleshooting",

@@ -1,12 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader, SelectField } from "@/components/ui";
 
 export default function ReportsPage() {
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [requestStatus, setRequestStatus] = useState("");
   const [overtimeStatus, setOvertimeStatus] = useState("");
+  const [payrollState, setPayrollState] = useState<{
+    latestRunCount: number;
+    oldRevisionRunCount: number;
+    status: "generated" | "month_open" | "not_generated";
+  }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`/api/attendance/closing?month=${month}`, { signal: controller.signal })
+      .then((response) => response.json())
+      .then((payload: { closing?: { payrollExport?: typeof payrollState } }) =>
+        setPayrollState(payload.closing?.payrollExport),
+      )
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [month]);
   const exportParameters = new URLSearchParams({ month });
   if (requestStatus) exportParameters.set("requestStatus", requestStatus);
   if (overtimeStatus) exportParameters.set("overtimeStatus", overtimeStatus);
@@ -75,6 +90,28 @@ export default function ReportsPage() {
           <p>付与・調整・消化・戻し・失効を追記順に出力します。</p>
           <a className="ui-button ui-button--secondary" download href="/api/exports/leave-ledger">
             休暇台帳CSVを出力
+          </a>
+        </article>
+        <article className="report-payroll-card">
+          <div>
+            <span className="payroll-status payroll-status--neutral">給与ソフト連携</span>
+            <h2>給与連携CSV</h2>
+          </div>
+          <p>
+            {payrollState?.status === "generated"
+              ? `現在の締め版を出力済みです（${payrollState.latestRunCount}件）。`
+              : payrollState?.status === "not_generated"
+                ? "月次締め済み・CSVは未生成です。"
+                : "月次締め後に全件検査できます。"}
+            {payrollState?.oldRevisionRunCount
+              ? ` 旧リビジョンのrunが${payrollState.oldRevisionRunCount}件あります。`
+              : ""}
+          </p>
+          <a
+            className="ui-button ui-button--primary"
+            href={`/payroll-exports/inspect?month=${month}`}
+          >
+            全件検査・出力へ
           </a>
         </article>
       </section>

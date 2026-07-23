@@ -544,6 +544,231 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
   expect(consoleProblems).toEqual([]);
 });
 
+test("HR publishes a payroll profile, validates, generates, and preserves old runs", async ({
+  page,
+}) => {
+  const consoleProblems = collectConsoleProblems(page);
+  const targetMonth = `2024-${String((Date.now() % 12) + 1).padStart(2, "0")}`;
+  const workDate = `${targetMonth}-14`;
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await login(page, hrAdmin.email, hrAdmin.password);
+
+  const initialClosingResponse = await page.request.get(
+    `/api/attendance/closing?month=${targetMonth}`,
+  );
+  const initialClosing = (await initialClosingResponse.json()) as {
+    closing: { period: { status: "closed" | "open"; version: number } };
+  };
+  if (initialClosing.closing.period.status === "closed") {
+    const reopened = await page.request.post("/api/attendance/closing", {
+      data: {
+        action: "reopen",
+        expectedVersion: initialClosing.closing.period.version,
+        month: targetMonth,
+        reason: "給与連携E2Eを再実行するため",
+      },
+    });
+    expect(reopened.ok()).toBe(true);
+  }
+
+  const pendingResponse = await page.request.get(
+    `/api/attendance/correction-reviews?status=pending&from=${targetMonth}-01&to=${targetMonth}-28`,
+  );
+  const pendingPayload = (await pendingResponse.json()) as {
+    requests: Array<{ id: string; workDate: string }>;
+  };
+  let correctionId = pendingPayload.requests.find((request) => request.workDate === workDate)?.id;
+  if (!correctionId) {
+    await login(page, employee.email, employee.password);
+    const correctionResponse = await page.request.post("/api/attendance/corrections", {
+      data: {
+        entries: [
+          { occurredAt: `${workDate}T00:00:00.000Z`, originalEventId: null, type: "clock_in" },
+          { occurredAt: `${workDate}T09:00:00.000Z`, originalEventId: null, type: "clock_out" },
+        ],
+        reason: "給与連携E2Eの締めスナップショットを作成するため",
+        workDate,
+      },
+    });
+    expect(correctionResponse.status()).toBe(201);
+    const correction = (await correctionResponse.json()) as {
+      correction: { request: { id: string } };
+    };
+    correctionId = correction.correction.request.id;
+    await login(page, hrAdmin.email, hrAdmin.password);
+  }
+  const review = await page.request.patch(`/api/attendance/correction-reviews/${correctionId}`, {
+    data: { decision: "approve" },
+  });
+  expect(review.ok()).toBe(true);
+  const openStateResponse = await page.request.get(`/api/attendance/closing?month=${targetMonth}`);
+  const openState = (await openStateResponse.json()) as {
+    closing: { canClose: boolean; period: { version: number } };
+  };
+  expect(openState.closing.canClose).toBe(true);
+  const closed = await page.request.post("/api/attendance/closing", {
+    data: {
+      action: "close",
+      expectedVersion: openState.closing.period.version,
+      month: targetMonth,
+    },
+  });
+  expect(closed.ok()).toBe(true);
+
+  const profilesResponse = await page.request.get("/api/payroll-exports/profiles");
+  expect(profilesResponse.ok()).toBe(true);
+  const profilesPayload = (await profilesResponse.json()) as {
+    genericDraft: { draftConfig: unknown };
+  };
+  const createdProfileResponse = await page.request.post("/api/payroll-exports/profiles", {
+    data: {
+      config: profilesPayload.genericDraft.draftConfig,
+      description: "Playwrightで公開・検査・再現性を確認するプロファイル",
+      name: `E2E給与CSV-${runId}`,
+    },
+  });
+  expect(createdProfileResponse.status()).toBe(201);
+  const createdProfile = (await createdProfileResponse.json()) as {
+    profile: { id: string };
+  };
+
+  await page.goto(`/payroll-exports/profiles/${createdProfile.profile.id}`);
+  await expect(page.getByRole("heading", { level: 1, name: `E2E給与CSV-${runId}` })).toBeVisible();
+  await page.getByRole("button", { name: "ドラフトを保存・検査" }).click();
+  await expect(page.getByText("設定を検査し、ドラフトを保存しました。")).toBeVisible();
+  await page.getByRole("button", { name: "公開前の確認" }).click();
+  const publishDialog = page.getByRole("alertdialog", {
+    name: "新しい公開版を作成しますか？",
+  });
+  await expect(publishDialog).toBeVisible();
+  await expect(publishDialog.getByRole("button", { name: "キャンセル" })).toBeFocused();
+  await publishDialog.getByRole("button", { name: "この設定を公開" }).click();
+  await expect(page.getByText("プロファイルを不変の公開版として保存しました。")).toBeVisible();
+  await expect(page.getByText("公開版は変更できません")).toBeVisible();
+
+  await page.goto(`/payroll-exports/profiles/${createdProfile.profile.id}/mappings`);
+  await page.getByLabel("従業員を検索").fill(employee.employeeNumber);
+  const mappingCard = page
+    .locator(".payroll-mapping-card")
+    .filter({ hasText: employee.employeeNumber });
+  await mappingCard.getByLabel("外部従業員コード").fill(`PAY-${runId}`);
+  await mappingCard.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText(/外部従業員コードを更新しました/)).toBeVisible();
+  const allMappingsResponse = await page.request.get(
+    `/api/payroll-exports/profiles/${createdProfile.profile.id}/mappings`,
+  );
+  const allMappings = (await allMappingsResponse.json()) as {
+    mappings: Array<{
+      employeeId: string;
+      externalEmployeeCode: string | null;
+      mappingVersion: number | null;
+    }>;
+  };
+  for (const [index, mapping] of allMappings.mappings.entries()) {
+    if (mapping.externalEmployeeCode) continue;
+    const saved = await page.request.patch(
+      `/api/payroll-exports/profiles/${createdProfile.profile.id}/mappings`,
+      {
+        data: {
+          employeeId: mapping.employeeId,
+          expectedVersion: mapping.mappingVersion ?? 0,
+          externalEmployeeCode: `AUTO-${index}-${runId}`,
+        },
+      },
+    );
+    expect(saved.ok()).toBe(true);
+  }
+
+  await page.goto(
+    `/payroll-exports/inspect?month=${targetMonth}&profileId=${createdProfile.profile.id}`,
+  );
+  await expect(page.getByRole("heading", { level: 1, name: "全件検査・CSV生成" })).toBeVisible();
+  await page.getByRole("button", { name: "全件検査を実行" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "CSVを生成できます" })).toBeVisible();
+  await expect(
+    page.locator(".payroll-validation-summary dl div").filter({ hasText: "エラー" }),
+  ).toContainText("0件");
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-payroll-inspection-desktop.png" });
+
+  await page.getByRole("button", { name: "生成内容を確認" }).click();
+  const generationDialog = page.getByRole("alertdialog", {
+    name: "この条件で給与連携CSVを生成しますか？",
+  });
+  await expect(generationDialog.getByText("このCSVは給与計算結果ではありません。")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(generationDialog).toBeHidden();
+  await expect(page.getByRole("button", { name: "生成内容を確認" })).toBeFocused();
+  await page.getByRole("button", { name: "生成内容を確認" }).click();
+  const downloadPromise = page.waitForEvent("download");
+  await page
+    .getByRole("alertdialog", { name: "この条件で給与連携CSVを生成しますか？" })
+    .getByRole("button", { name: "確認してCSVを生成" })
+    .click();
+  await downloadPromise;
+  const generationMessage = page.getByText(/CSVを生成しました。run ID:/);
+  await expect(generationMessage).toBeVisible();
+  const generatedRunId = (await generationMessage.textContent())?.split("run ID: ").at(-1);
+  expect(generatedRunId).toBeTruthy();
+
+  await page.goto("/payroll-exports/runs");
+  const firstRun = page.locator(".payroll-run-list article").filter({ hasText: generatedRunId! });
+  await expect(firstRun.getByText("現在の締め版")).toBeVisible();
+  const runIdText = await firstRun.locator("code").first().textContent();
+  expect(runIdText).toBeTruthy();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-payroll-runs-desktop.png" });
+
+  const currentStateResponse = await page.request.get(
+    `/api/attendance/closing?month=${targetMonth}`,
+  );
+  const currentState = (await currentStateResponse.json()) as {
+    closing: { period: { version: number } };
+  };
+  const reopened = await page.request.post("/api/attendance/closing", {
+    data: {
+      action: "reopen",
+      expectedVersion: currentState.closing.period.version,
+      month: targetMonth,
+      reason: "旧給与連携runの表示を確認するため",
+    },
+  });
+  expect(reopened.ok()).toBe(true);
+  const reopenedPeriod = (await reopened.json()) as { period: { version: number } };
+  const reclosed = await page.request.post("/api/attendance/closing", {
+    data: {
+      action: "close",
+      expectedVersion: reopenedPeriod.period.version,
+      month: targetMonth,
+    },
+  });
+  expect(reclosed.ok()).toBe(true);
+  await page.reload();
+  const oldRun = page.locator(".payroll-run-list article").filter({ hasText: runIdText! });
+  await expect(oldRun.getByText("旧リビジョン")).toBeVisible();
+  const redownloadPromise = page.waitForEvent("download");
+  await oldRun.getByRole("button", { name: "整合性確認して再ダウンロード" }).click();
+  await redownloadPromise;
+  await expect(page.getByText(/SHA-256一致を確認しました/)).toBeVisible();
+
+  await page.setViewportSize({ height: 720, width: 320 });
+  await page.goto("/payroll-exports/profiles");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.goto(`/payroll-exports/profiles/${createdProfile.profile.id}/mappings`);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.goto("/payroll-exports/runs");
+  await expect(page.locator(".payroll-run-list article").first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-payroll-runs-mobile.png" });
+  expect(consoleProblems.filter((problem) => !problem.includes("eval() is not supported"))).toEqual(
+    [],
+  );
+});
+
 test("HR configures leave and an employee completes the mobile request workflow", async ({
   page,
 }) => {
@@ -694,7 +919,7 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   const articleHrefs = await page
     .locator(".guide-card")
     .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute("href")));
-  expect(articleHrefs).toHaveLength(13);
+  expect(articleHrefs).toHaveLength(14);
   for (const href of articleHrefs) {
     expect(href).toBeTruthy();
     const response = await page.goto(href!);

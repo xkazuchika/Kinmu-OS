@@ -128,13 +128,18 @@ export function searchAuditLogs(
   input: {
     action?: string;
     actorUserId?: string;
+    attendanceRevision?: number;
     entityId?: string;
     employeeId?: string;
     from?: Date;
     organizationId: string;
     overtimeRequestKind?: "holiday_work" | "overtime";
+    payrollOnly?: boolean;
+    profileId?: string;
+    runId?: string;
     targetMonth?: string;
     to?: Date;
+    validationResult?: "failed" | "passed";
   },
 ) {
   const conditions = [eq(auditLogs.organizationId, input.organizationId)];
@@ -146,9 +151,28 @@ export function searchAuditLogs(
   if (input.overtimeRequestKind) {
     conditions.push(sql`${auditLogs.metadata} ->> 'kind' = ${input.overtimeRequestKind}`);
   }
+  if (input.payrollOnly) conditions.push(sql`${auditLogs.action}::text LIKE 'payroll_%'`);
+  if (input.profileId) {
+    conditions.push(
+      sql`(${auditLogs.metadata} ->> 'profileId' = ${input.profileId} OR (${auditLogs.entityType} = 'payroll_export_profile' AND ${auditLogs.entityId} = ${input.profileId}))`,
+    );
+  }
+  if (input.runId) {
+    conditions.push(
+      and(eq(auditLogs.entityType, "payroll_export_run"), eq(auditLogs.entityId, input.runId))!,
+    );
+  }
+  if (input.attendanceRevision) {
+    conditions.push(
+      sql`${auditLogs.metadata} ->> 'attendanceRevision' = ${String(input.attendanceRevision)}`,
+    );
+  }
+  if (input.validationResult) {
+    conditions.push(sql`${auditLogs.metadata} ->> 'result' = ${input.validationResult}`);
+  }
   if (input.targetMonth) {
     conditions.push(
-      sql`coalesce(${auditLogs.metadata} ->> 'month', ${auditLogs.metadata} ->> 'workDate') LIKE ${`${input.targetMonth}%`}`,
+      sql`coalesce(${auditLogs.metadata} ->> 'targetMonth', ${auditLogs.metadata} ->> 'month', ${auditLogs.metadata} ->> 'workDate') LIKE ${`${input.targetMonth}%`}`,
     );
   }
   if (input.action)

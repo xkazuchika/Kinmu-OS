@@ -13,6 +13,7 @@ import { AuthorizationError, requireActor, requirePermission } from "@/lib/autho
 import { getDatabase } from "@/lib/db/client";
 import { organizations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { getPayrollExportMonthState } from "@/lib/payroll-export-runs";
 
 async function context(request: Request) {
   const database = getDatabase();
@@ -43,9 +44,10 @@ export async function GET(request: Request) {
       .from(organizations)
       .where(eq(organizations.id, actor.organizationId))
       .limit(1);
-    const [period, inspection] = await Promise.all([
+    const [period, inspection, payrollExport] = await Promise.all([
       getAttendanceMonthStatus(database, actor.organizationId, month),
       inspectAttendanceMonth(database, actor.organizationId, month),
+      getPayrollExportMonthState(database, actor, month),
     ]);
     return Response.json({
       closing: {
@@ -53,6 +55,7 @@ export async function GET(request: Request) {
         currentMonth: currentMonthInTimezone(organization.timezone),
         ended: isEndedAttendanceMonth(month, organization.timezone),
         month,
+        payrollExport,
         period,
       },
     });

@@ -52,8 +52,8 @@ async function withTemporaryDatabase(
   }
 }
 
-describeDatabase("v0.4 and v0.5 additive migrations", () => {
-  it("migrates an empty database through v0.5", async () => {
+describeDatabase("v0.4 through v0.6 additive migrations", () => {
+  it("migrates an empty database through v0.6", async () => {
     await withTemporaryDatabase(databaseUrl!, async (connection) => {
       await applyMigrationFiles(connection, await migrationFiles());
 
@@ -74,11 +74,15 @@ describeDatabase("v0.4 and v0.5 additive migrations", () => {
               'import_batches',
               'overtime_request_policies',
               'overtime_work_requests',
-              'notifications'
+              'notifications',
+              'payroll_export_profiles',
+              'payroll_export_profile_versions',
+              'payroll_employee_mappings',
+              'payroll_export_runs'
             )
         `;
 
-      expect(tableCount).toBe(13);
+      expect(tableCount).toBe(17);
     });
   }, 30_000);
 
@@ -369,6 +373,167 @@ describeDatabase("v0.4 and v0.5 additive migrations", () => {
         overtimeMinutes: 60,
         overtimePolicyId: null,
         overtimeRequestIds: [],
+        workedMinutes: 540,
+      });
+    });
+  }, 30_000);
+
+  it("adds one unpublished payroll draft to v0.5 without changing login or closed attendance data", async () => {
+    await withTemporaryDatabase(databaseUrl!, async (connection) => {
+      const files = await migrationFiles();
+      const v05Files = files.filter((fileName) => Number(fileName.slice(0, 4)) <= 15);
+      const v06Files = files.filter((fileName) => Number(fileName.slice(0, 4)) >= 16);
+      await applyMigrationFiles(connection, v05Files);
+
+      const [organization] = await connection<{ id: string }[]>`
+          INSERT INTO organizations (name)
+          VALUES ('v0.5給与連携移行組織')
+          RETURNING id
+        `;
+      const [owner] = await connection<{ id: string }[]>`
+          INSERT INTO users (organization_id, email, display_name, role, status)
+          VALUES (
+            ${organization.id},
+            'v06-migration-owner@example.com',
+            'v0.6移行管理者',
+            'owner',
+            'active'
+          )
+          RETURNING id
+        `;
+      const passwordHash = "$argon2id$v=19$m=65536,t=3,p=4$preserved$login-hash";
+      await connection`
+          INSERT INTO user_credentials (user_id, password_hash)
+          VALUES (${owner.id}, ${passwordHash})
+        `;
+      const [employee] = await connection<{ id: string }[]>`
+          INSERT INTO employees (
+            organization_id,
+            user_id,
+            employee_number,
+            family_name,
+            given_name,
+            status
+          )
+          VALUES (${organization.id}, ${owner.id}, 'V06-001', '移行', '従業員', 'active')
+          RETURNING id
+        `;
+      const [period] = await connection<{ id: string }[]>`
+          INSERT INTO attendance_month_periods (
+            organization_id,
+            target_month,
+            status,
+            current_revision,
+            next_revision
+          )
+          VALUES (${organization.id}, '2026-07', 'closed', 1, 2)
+          RETURNING id
+        `;
+      const [revision] = await connection<{ id: string }[]>`
+          INSERT INTO attendance_month_revisions (
+            period_id,
+            organization_id,
+            target_month,
+            revision,
+            closed_by_user_id,
+            employee_count,
+            day_count,
+            scheduled_minutes,
+            worked_minutes,
+            overtime_minutes
+          )
+          VALUES (${period.id}, ${organization.id}, '2026-07', 1, ${owner.id}, 1, 1, 480, 540, 60)
+          RETURNING id
+        `;
+      const [snapshot] = await connection<{ id: string }[]>`
+          INSERT INTO attendance_month_day_snapshots (
+            revision_id,
+            organization_id,
+            employee_id,
+            employee_number,
+            display_name,
+            work_date,
+            status,
+            scheduled_minutes,
+            worked_minutes,
+            break_minutes,
+            overtime_minutes
+          )
+          VALUES (
+            ${revision.id},
+            ${organization.id},
+            ${employee.id},
+            'V06-001',
+            '移行 従業員',
+            '2026-07-31',
+            'complete',
+            480,
+            540,
+            60,
+            60
+          )
+          RETURNING id
+        `;
+
+      await applyMigrationFiles(connection, v06Files);
+
+      const drafts = await connection<
+        {
+          encoding: string;
+          name: string;
+          status: string;
+          version: number;
+        }[]
+      >`
+          SELECT
+            name,
+            status,
+            version,
+            draft_config->>'encoding' AS encoding
+          FROM payroll_export_profiles
+          WHERE organization_id = ${organization.id}
+        `;
+      const [preservedCredential] = await connection<{ passwordHash: string }[]>`
+          SELECT password_hash AS "passwordHash"
+          FROM user_credentials
+          WHERE user_id = ${owner.id}
+        `;
+      const [preservedCsvSource] = await connection<
+        {
+          displayName: string;
+          employeeNumber: string;
+          id: string;
+          overtimeMinutes: number | null;
+          scheduledMinutes: number;
+          workedMinutes: number | null;
+        }[]
+      >`
+          SELECT
+            id,
+            employee_number AS "employeeNumber",
+            display_name AS "displayName",
+            scheduled_minutes AS "scheduledMinutes",
+            worked_minutes AS "workedMinutes",
+            overtime_minutes AS "overtimeMinutes"
+          FROM attendance_month_day_snapshots
+          WHERE id = ${snapshot.id}
+        `;
+
+      expect(drafts).toEqual([
+        {
+          encoding: "utf8_bom",
+          name: "汎用給与連携",
+          status: "draft",
+          version: 0,
+        },
+      ]);
+      expect(preservedCredential.passwordHash).toBe(passwordHash);
+      expect(preservedCsvSource).toEqual({
+        displayName: "移行 従業員",
+        employeeNumber: "V06-001",
+        id: snapshot.id,
+        overtimeMinutes: 60,
+        scheduledMinutes: 480,
         workedMinutes: 540,
       });
     });
