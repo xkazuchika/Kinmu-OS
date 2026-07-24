@@ -6,8 +6,10 @@ import { GuideMarkdown } from "@/components/guide-markdown";
 import { sessionForToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { getDatabase } from "@/lib/db/client";
 import { loadEnvironment } from "@/lib/env";
+import { safeReturnTo } from "@/lib/navigation-context";
 import {
   GuideContentError,
+  type GuideRole,
   guideForSlug,
   guidesForRole,
   parseGuideMarkdown,
@@ -15,7 +17,13 @@ import {
   roleLabel,
 } from "@/lib/user-guide";
 
-export default async function GuideArticlePage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function GuideArticlePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ returnTo?: string | string[] }>;
+}) {
   const { slug } = await params;
   const guide = guideForSlug(slug);
   if (!guide) notFound();
@@ -23,6 +31,8 @@ export default async function GuideArticlePage({ params }: { params: Promise<{ s
   const cookieStore = await cookies();
   const actor = await sessionForToken(getDatabase(), cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!actor) redirect("/login");
+  if (!(guide.roles as readonly GuideRole[]).includes(actor.role)) notFound();
+  const returnTo = safeReturnTo((await searchParams).returnTo, actor.role);
 
   const ordered = guidesForRole(actor.role);
   const position = ordered.findIndex((entry) => entry.slug === guide.slug);
@@ -48,6 +58,11 @@ export default async function GuideArticlePage({ params }: { params: Promise<{ s
           <a href={sourceUrl} rel="noreferrer" target="_blank">
             公開リポジトリのガイドを確認する
           </a>
+          {returnTo ? (
+            <Link className="ui-button ui-button--secondary" href={returnTo}>
+              元の画面へ戻る
+            </Link>
+          ) : null}
         </section>
       </main>
     );
@@ -67,6 +82,11 @@ export default async function GuideArticlePage({ params }: { params: Promise<{ s
         <span>対象役割</span>
         <strong>{guide.roles.map(roleLabel).join("・")}</strong>
       </div>
+      {returnTo ? (
+        <Link className="guide-return-link" href={returnTo}>
+          ← 元の画面へ戻る
+        </Link>
+      ) : null}
       <article>
         <GuideMarkdown blocks={blocks} />
       </article>

@@ -1,16 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
+import { useUnsavedChanges } from "@/components/form-state";
 import {
+  AsyncButton,
   Button,
-  EmptyState,
   Field,
   FilterBar,
+  ListHeader,
   PageHeader,
+  ResultSummary,
   SelectField,
+  StatePanel,
   Table,
+  TaskContext,
   Toast,
 } from "@/components/ui";
 
@@ -42,8 +47,13 @@ export default function EmployeesPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [error, setError] = useState<string>();
+  const [dirty, setDirty] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState<string>();
+  const [loaded, setLoaded] = useState(false);
+  useUnsavedChanges(dirty);
 
-  async function loadDepartments() {
+  const loadDepartments = useCallback(async () => {
     const response = await fetch("/api/departments");
     const payload = (await response.json()) as { departments?: Department[]; error?: string };
     if (!response.ok || !payload.departments) {
@@ -51,32 +61,46 @@ export default function EmployeesPage() {
       return;
     }
     setDepartments(payload.departments.filter((department) => department.active));
-  }
+  }, []);
 
-  async function loadEmployees(parameters = new URLSearchParams()) {
+  const loadEmployees = useCallback(async (parameters = new URLSearchParams()) => {
     const response = await fetch(`/api/employees?${parameters}`);
     const payload = (await response.json()) as { employees?: Employee[]; error?: string };
     if (!response.ok || !payload.employees) {
       setError(payload.error ?? "従業員一覧を取得できませんでした。");
+      setLoaded(true);
       return;
     }
     setError(undefined);
     setEmployees(payload.employees);
-  }
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void Promise.all([loadDepartments(), loadEmployees()]);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadDepartments, loadEmployees]);
 
   async function createEmployee(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSubmitting(true);
+    setSuccess(undefined);
     const response = await fetch("/api/employees", {
       body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))),
       headers: { "content-type": "application/json" },
       method: "POST",
     });
     const payload = (await response.json()) as { error?: string };
+    setSubmitting(false);
     if (!response.ok) {
       setError(payload.error ?? "従業員を作成できませんでした。");
       return;
     }
     event.currentTarget.reset();
+    setDirty(false);
+    setSuccess("従業員を登録しました。次に利用者を紐付けると本人がログインできます。");
     await loadEmployees();
   }
 
@@ -91,7 +115,21 @@ export default function EmployeesPage() {
 
   return (
     <main className="registry-page">
-      <PageHeader title="従業員">基本情報・雇用情報・主所属を管理します。</PageHeader>
+      <PageHeader
+        actions={
+          <Link className="ui-button ui-button--primary" href="/employees/import">
+            CSVでまとめて登録
+          </Link>
+        }
+        status={loaded ? `${employees.length}名を表示` : "読み込み中"}
+        title="従業員"
+      >
+        在籍する人の基本情報・雇用情報・主所属を登録し、台帳として管理します。
+      </PageHeader>
+      <TaskContext
+        completion="従業員を登録し、必要に応じてログイン利用者と勤務ルールを設定します。"
+        prerequisites={["主所属として使う部署を先に登録してください。"]}
+      />
       <div className="registry-actions">
         <Button
           onClick={() => {
@@ -107,27 +145,77 @@ export default function EmployeesPage() {
         <Link href="/employees/import">CSV取込</Link>
       </div>
       <Toast tone="error">{error}</Toast>
+      {success ? (
+        <ResultSummary
+          action={<Link href="/settings/users">利用者を設定</Link>}
+          title="従業員を登録しました"
+        >
+          {success}
+        </ResultSummary>
+      ) : null}
       <section aria-labelledby="create-employee-heading" className="registry-create">
         <h2 id="create-employee-heading">従業員を追加</h2>
         {departments.length === 0 ? (
-          <EmptyState
+          <StatePanel
             action={
               <Button onClick={() => void loadDepartments()} variant="secondary">
                 部署を読み込む
               </Button>
             }
+            kind="notConfigured"
             title="有効な部署を読み込んでください"
           >
-            従業員を登録する前に、主所属として使う部署が必要です。
-          </EmptyState>
+            <p>従業員を登録する前に、主所属として使う部署が必要です。</p>
+          </StatePanel>
         ) : (
-          <form onSubmit={createEmployee}>
-            <Field id="employee-number" label="従業員番号" name="employeeNumber" required />
-            <Field id="employee-family-name" label="姓" name="familyName" required />
-            <Field id="employee-given-name" label="名" name="givenName" required />
-            <Field id="employee-display-name" label="表示名" name="displayName" required />
-            <Field id="employee-email" label="連絡用メール" name="contactEmail" type="email" />
-            <SelectField id="employee-department" label="主所属" name="departmentId" required>
+          <form onChange={() => setDirty(true)} onSubmit={createEmployee}>
+            <Field
+              constraint="組織内で重複しない番号を入力してください。"
+              example="A001"
+              fieldSize="short"
+              id="employee-number"
+              label="従業員番号"
+              name="employeeNumber"
+              required
+            />
+            <Field
+              fieldSize="medium"
+              id="employee-family-name"
+              label="姓"
+              name="familyName"
+              required
+            />
+            <Field
+              fieldSize="medium"
+              id="employee-given-name"
+              label="名"
+              name="givenName"
+              required
+            />
+            <Field
+              description="一覧や申請画面に表示する氏名です。"
+              example="山田 太郎"
+              fieldSize="medium"
+              id="employee-display-name"
+              label="表示名"
+              name="displayName"
+              required
+            />
+            <Field
+              fieldSize="long"
+              id="employee-email"
+              label="連絡用メール"
+              name="contactEmail"
+              optional
+              type="email"
+            />
+            <SelectField
+              fieldSize="long"
+              id="employee-department"
+              label="主所属"
+              name="departmentId"
+              required
+            >
               <option value="">選択してください</option>
               {departments.map((department) => (
                 <option key={department.id} value={department.id}>
@@ -135,7 +223,14 @@ export default function EmployeesPage() {
                 </option>
               ))}
             </SelectField>
-            <Field id="employee-joined-on" label="入社日" name="joinedOn" required type="date" />
+            <Field
+              fieldSize="medium"
+              id="employee-joined-on"
+              label="入社日"
+              name="joinedOn"
+              required
+              type="date"
+            />
             <SelectField
               defaultValue="full_time"
               id="employee-type"
@@ -153,7 +248,9 @@ export default function EmployeesPage() {
               <option value="on_leave">休職</option>
               <option value="terminated">退職</option>
             </SelectField>
-            <Button type="submit">従業員を登録</Button>
+            <AsyncButton pending={submitting} pendingLabel="従業員を登録しています" type="submit">
+              従業員を登録
+            </AsyncButton>
           </form>
         )}
       </section>
@@ -184,12 +281,20 @@ export default function EmployeesPage() {
             </Button>
           </FilterBar>
         </form>
+        <ListHeader filteredCount={employees.length} totalCount={employees.length} />
         {employees.length === 0 ? (
-          <EmptyState title="従業員が表示されていません">
-            一覧を読み込むか、条件を変えて検索してください。
-          </EmptyState>
+          <StatePanel
+            kind={loaded ? "noSearchResults" : "noRecords"}
+            title={loaded ? "条件に一致する従業員はいません" : "従業員を読み込んでいます"}
+          >
+            <p>
+              {loaded
+                ? "条件を変えて検索するか、上のフォームから従業員を登録してください。"
+                : "在籍状況と所属を確認しています。"}
+            </p>
+          </StatePanel>
         ) : (
-          <Table label="従業員一覧">
+          <Table label="従業員一覧" responsive>
             <thead>
               <tr>
                 <th>従業員番号</th>
@@ -203,14 +308,14 @@ export default function EmployeesPage() {
             <tbody>
               {employees.map((employee) => (
                 <tr key={employee.id}>
-                  <td>{employee.employeeNumber}</td>
-                  <td>
+                  <td data-label="従業員番号">{employee.employeeNumber}</td>
+                  <td data-label="表示名">
                     <Link href={`/employees/${employee.id}`}>{employee.displayName}</Link>
                   </td>
-                  <td>{employee.departmentName}</td>
-                  <td>{employmentLabels[employee.employmentType]}</td>
-                  <td>{statusLabels[employee.status]}</td>
-                  <td>{employee.joinedOn}</td>
+                  <td data-label="主所属">{employee.departmentName}</td>
+                  <td data-label="雇用区分">{employmentLabels[employee.employmentType]}</td>
+                  <td data-label="在籍状態">{statusLabels[employee.status]}</td>
+                  <td data-label="入社日">{employee.joinedOn}</td>
                 </tr>
               ))}
             </tbody>

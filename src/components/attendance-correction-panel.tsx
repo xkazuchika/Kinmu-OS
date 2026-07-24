@@ -4,8 +4,9 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
-import { Button, SelectField, TextareaField, Toast } from "@/components/ui";
+import { useUnsavedChanges } from "@/components/form-state";
 import { ClockIcon } from "@/components/icons";
+import { AsyncButton, Button, Field, SelectField, TextareaField, Toast } from "@/components/ui";
 
 type PunchType = "break_end" | "break_start" | "clock_in" | "clock_out";
 type EventEntry = { id: string; occurredAt: string; type: PunchType };
@@ -199,6 +200,15 @@ export function AttendanceCorrectionPanel({
     }
     return result;
   }, [editingDay, entries, timezone]);
+  const dirty = Boolean(editingDay) && (changes.length > 0 || reason.trim().length > 0);
+  useUnsavedChanges(dirty);
+
+  function closeEditor() {
+    if (dirty && !window.confirm("未保存の修正内容を破棄して閉じますか？")) return;
+    setEditingDay(undefined);
+    setReason("");
+    setError(undefined);
+  }
 
   function begin(day: CorrectionDay) {
     setEditingDay(day);
@@ -384,7 +394,7 @@ export function AttendanceCorrectionPanel({
                 <span className="correction-eyebrow">{editingDay.workDate}</span>
                 <h3>希望する打刻を編集</h3>
               </div>
-              <Button onClick={() => setEditingDay(undefined)} type="button" variant="text">
+              <Button onClick={closeEditor} type="button" variant="text">
                 閉じる
               </Button>
             </header>
@@ -411,23 +421,20 @@ export function AttendanceCorrectionPanel({
                       </option>
                     ))}
                   </SelectField>
-                  <label className="ui-field" htmlFor={`correction-time-${index}`}>
-                    <span>{index + 1}件目の時刻</span>
-                    <input
-                      id={`correction-time-${index}`}
-                      onChange={(event) =>
-                        setEntries((current) =>
-                          current.map((item, itemIndex) =>
-                            itemIndex === index
-                              ? { ...item, occurredAt: event.target.value }
-                              : item,
-                          ),
-                        )
-                      }
-                      type="datetime-local"
-                      value={entry.occurredAt}
-                    />
-                  </label>
+                  <Field
+                    fieldSize="long"
+                    id={`correction-time-${index}`}
+                    label={`${index + 1}件目の時刻`}
+                    onChange={(event) =>
+                      setEntries((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, occurredAt: event.target.value } : item,
+                        ),
+                      )
+                    }
+                    type="datetime-local"
+                    value={entry.occurredAt}
+                  />
                   <Button
                     aria-label={`${index + 1}件目を削除`}
                     onClick={() =>
@@ -485,23 +492,27 @@ export function AttendanceCorrectionPanel({
               </p>
             </div>
             <TextareaField
+              constraint="1,000文字以内で、元の打刻が誤っている理由を入力してください。"
               error={!reason.trim() && error ? "修正理由を入力してください。" : undefined}
+              example="退勤ボタンを押し忘れたため"
               id="correction-reason"
               label="修正理由"
               maxLength={1000}
               onChange={(event) => setReason(event.target.value)}
-              placeholder="例：退勤ボタンを押し忘れたため"
+              required
               rows={3}
               value={reason}
             />
             <div className="correction-actions">
-              <Button
+              <AsyncButton
                 disabled={submitting || changes.length === 0}
                 onClick={() => void submit()}
+                pending={submitting}
+                pendingLabel="勤怠修正を送信しています"
                 type="button"
               >
-                {submitting ? "送信中…" : "この内容で申請"}
-              </Button>
+                この内容で申請
+              </AsyncButton>
             </div>
           </div>
         ) : null}

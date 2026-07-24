@@ -86,3 +86,53 @@ export function BellIcon(props: IconProps) {
     </Icon>
   );
 }
+
+export function CalendarIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect height="17" rx="2" width="18" x="3" y="4" {...stroke} />
+      <path d="M8 2v4M16 2v4M3 9h18" {...stroke} />
+    </Icon>
+  );
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m7 10 5 5 5-5" {...stroke} />
+    </Icon>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m10 7 5 5-5 5" {...stroke} />
+    </Icon>
+  );
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m6 6 12 12M18 6 6 18" {...stroke} />
+    </Icon>
+  );
+}
+
+export function HelpIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" {...stroke} />
+      <path d="M9.7 9a2.5 2.5 0 1 1 3.7 2.2c-.9.5-1.4 1-1.4 2.1M12 17h.01" {...stroke} />
+    </Icon>
+  );
+}
+
+export function MenuIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 6h16M4 12h16M4 18h16" {...stroke} />
+    </Icon>
+  );
+}

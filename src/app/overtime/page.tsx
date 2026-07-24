@@ -3,14 +3,19 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
+import { useUnsavedChanges } from "@/components/form-state";
 import {
+  AsyncButton,
   Button,
   ConfirmDialog,
   EmptyState,
   Field,
   PageHeader,
+  ResultSummary,
   SelectField,
+  StatePanel,
   Table,
+  TaskContext,
   TextareaField,
   Toast,
 } from "@/components/ui";
@@ -91,6 +96,8 @@ export default function OvertimePage() {
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  useUnsavedChanges(dirty);
 
   const load = useCallback(async () => {
     const parameters = new URLSearchParams({ policyDate: today() });
@@ -166,6 +173,7 @@ export default function OvertimePage() {
     }
     setDraft(undefined);
     setPreview(undefined);
+    setDirty(false);
     setSuccess("残業・休日出勤申請を送信しました。");
     await load();
   }
@@ -191,11 +199,26 @@ export default function OvertimePage() {
 
   return (
     <main className="registry-page feature-page">
-      <PageHeader title="残業・休日出勤">
+      <PageHeader
+        status={policy ? `申請単位 ${policy.minuteIncrement}分` : "申請ルール未設定"}
+        title="残業・休日出勤"
+      >
         勤務予定を確認して、所定時間外の勤務を申請します。
       </PageHeader>
+      <TaskContext
+        blockers={policy ? [] : ["有効な残業申請ルールがありません。"]}
+        completion="勤務予定と申請分数を確認し、審査へ提出します。"
+        prerequisites={["対象日の勤務予定と、予定する開始・終了時刻を確認してください。"]}
+      />
       <Toast tone="error">{error}</Toast>
-      <Toast tone="success">{success}</Toast>
+      {success ? (
+        <ResultSummary
+          action={<Link href="/notifications">通知を確認</Link>}
+          title="申請を提出しました"
+        >
+          {success} 審査結果はこの画面の申請履歴と通知で確認できます。
+        </ResultSummary>
+      ) : null}
 
       <section aria-labelledby="overtime-policy-heading" className="feature-section">
         <div>
@@ -222,9 +245,9 @@ export default function OvertimePage() {
             </div>
           </dl>
         ) : (
-          <EmptyState title="申請ルールがまだ有効ではありません">
-            労務管理者が残業申請ルールを有効化すると申請できます。
-          </EmptyState>
+          <StatePanel kind="blocked" title="申請ルールがまだ有効ではありません">
+            <p>労務管理者が残業申請ルールを有効化すると申請できます。</p>
+          </StatePanel>
         )}
       </section>
 
@@ -233,9 +256,10 @@ export default function OvertimePage() {
           <h2 id="overtime-request-heading">新しい申請</h2>
           <p>翌日までの時間帯に対応します。休日区分は勤務カレンダーから自動判定されます。</p>
         </div>
-        <form className="feature-form" onSubmit={previewRequest}>
+        <form className="feature-form" onChange={() => setDirty(true)} onSubmit={previewRequest}>
           <Field
             defaultValue={today()}
+            description="勤務予定を確認する基準日です。"
             id="overtime-date"
             label="勤務日"
             name="workDate"
@@ -243,24 +267,41 @@ export default function OvertimePage() {
             required
             type="date"
           />
-          <SelectField id="overtime-kind" label="申請区分" name="kind">
+          <SelectField
+            description="未選択の場合は勤務カレンダーから自動判定します。"
+            id="overtime-kind"
+            label="申請区分"
+            name="kind"
+            optional
+          >
             <option value="">カレンダーから自動判定</option>
             <option value="overtime">残業</option>
             <option value="holiday_work">休日出勤</option>
           </SelectField>
           <Field id="overtime-start" label="予定開始" name="startTime" required type="time" />
-          <Field id="overtime-end" label="予定終了（翌日可）" name="endTime" required type="time" />
           <Field
+            description="翌日終了の場合も終了時刻だけを入力してください。"
+            id="overtime-end"
+            label="予定終了"
+            name="endTime"
+            required
+            type="time"
+          />
+          <Field
+            constraint={`${policy?.minuteIncrement ?? 1}分単位で入力します。`}
             defaultValue="0"
             id="overtime-break"
-            label="予定休憩（分）"
+            label="予定休憩"
             min="0"
             name="plannedBreakMinutes"
             required
             step={policy?.minuteIncrement ?? 1}
             type="number"
+            unit="分"
           />
           <TextareaField
+            constraint="500文字以内で、業務内容と必要性を記載してください。"
+            example="月末処理のため、18:00から19:30まで作業予定"
             id="overtime-reason"
             label="申請理由"
             maxLength={500}
@@ -268,9 +309,15 @@ export default function OvertimePage() {
             required
             rows={3}
           />
-          <Button ref={previewButtonRef} disabled={submitting || !policy} type="submit">
+          <AsyncButton
+            disabled={!policy}
+            pending={submitting}
+            pendingLabel="勤務予定を確認しています"
+            ref={previewButtonRef}
+            type="submit"
+          >
             勤務予定と申請分数を確認
-          </Button>
+          </AsyncButton>
         </form>
       </section>
 
@@ -296,7 +343,7 @@ export default function OvertimePage() {
         {requests.length === 0 ? (
           <EmptyState title="申請履歴はありません">条件に一致する申請はありません。</EmptyState>
         ) : (
-          <Table label="残業・休日出勤申請履歴">
+          <Table label="残業・休日出勤申請履歴" responsive>
             <thead>
               <tr>
                 <th>勤務日</th>
@@ -309,15 +356,15 @@ export default function OvertimePage() {
             <tbody>
               {requests.map((request) => (
                 <tr key={request.id}>
-                  <td>{request.workDate}</td>
-                  <td>
+                  <td data-label="勤務日">{request.workDate}</td>
+                  <td data-label="区分・時間">
                     {kindLabels[request.kind]}
                     <br />
                     <small>
                       {request.plannedMinutes}分（休憩 {request.plannedBreakMinutes}分）
                     </small>
                   </td>
-                  <td>
+                  <td data-label="理由">
                     {request.reason}
                     {request.reviewComment ? (
                       <>
@@ -326,12 +373,12 @@ export default function OvertimePage() {
                       </>
                     ) : null}
                   </td>
-                  <td>
+                  <td data-label="状態">
                     <span className={`status-pill status-pill--${request.status}`}>
                       {statusLabels[request.status]}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="操作">
                     {request.status === "pending" ? (
                       <Button
                         disabled={submitting}

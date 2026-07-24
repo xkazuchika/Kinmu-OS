@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { ClockIcon } from "@/components/icons";
 import { AttendanceCorrectionPanel } from "@/components/attendance-correction-panel";
-import { EmptyState, PageHeader } from "@/components/ui";
+import { EmptyState, Field, PageHeader, SubjectContext } from "@/components/ui";
 import { getMonthlyAttendance } from "@/lib/attendance";
 import { listOwnAttendanceCorrections } from "@/lib/attendance-corrections";
 import { sessionForToken, SESSION_COOKIE_NAME } from "@/lib/auth";
@@ -34,12 +34,31 @@ export default async function MyAttendancePage({
 
   return (
     <main className="employee-record-page">
-      <PageHeader title="勤務実績">月ごとの実労働・所定・残業を確認できます。</PageHeader>
+      <PageHeader
+        context={`${Number(month.slice(0, 4))}年${Number(month.slice(5, 7))}月`}
+        status={attendance.closure.status === "closed" ? "締め済み" : "編集中"}
+        title="勤務実績"
+      >
+        月ごとの打刻、実労働、所定、残業を確認し、誤りがある日は修正を申請します。
+      </PageHeader>
+      <SubjectContext
+        items={[
+          { label: "対象月", value: month },
+          { label: "タイムゾーン", value: attendance.timezone },
+          {
+            label: "状態",
+            value: attendance.closure.status === "closed" ? "締め済み" : "編集中",
+          },
+        ]}
+      />
       <form className="month-filter">
-        <label className="ui-field" htmlFor="attendance-month">
-          <span>表示する月</span>
-          <input defaultValue={month} id="attendance-month" name="month" type="month" />
-        </label>
+        <Field
+          defaultValue={month}
+          id="attendance-month"
+          label="表示する月"
+          name="month"
+          type="month"
+        />
         <button className="ui-button ui-button--secondary" type="submit">
           表示
         </button>

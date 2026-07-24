@@ -1,29 +1,53 @@
 import { cookies } from "next/headers";
-import { eq } from "drizzle-orm";
+import { and, count, eq, isNotNull, ne } from "drizzle-orm";
 import Link from "next/link";
 
 import { AppShell } from "@/components/app-shell";
 import { AttendancePanel } from "@/components/attendance-panel";
 import { ClockIcon, HomeIcon, PeopleIcon, ReportIcon, ShieldIcon } from "@/components/icons";
 import { EmptyState, PageHeader } from "@/components/ui";
+import { WorkflowProgressPanel } from "@/components/workflow-progress";
 import { sessionForToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { getAttendanceState, type PunchType } from "@/lib/attendance";
+import { getAttendanceMonthStatus } from "@/lib/attendance-closing";
+import type { AppDatabase } from "@/lib/db/client";
 import { getDatabase } from "@/lib/db/client";
-import { organizations } from "@/lib/db/schema";
+import {
+  attendanceCorrectionRequests,
+  employees,
+  leaveRequests,
+  leaveTypes,
+  organizations,
+  overtimeRequestPolicies,
+  overtimeWorkRequests,
+  payrollExportProfileVersions,
+  users,
+  workCalendarPatterns,
+  workRules,
+} from "@/lib/db/schema";
 import { managementDashboard } from "@/lib/reporting";
+import {
+  initialSetupProgress,
+  monthlyWorkflowProgress,
+  type WorkflowProgress,
+} from "@/lib/workflow-progress";
 
 export const dynamic = "force-dynamic";
 
 function EmployeeHome({
+  attention,
   attendance,
   dateLabel,
 }: {
+  attention: { corrections: number; leave: number; overtime: number };
   attendance: { actions: PunchType[]; stateLabel: string; workDate: string };
   dateLabel: string;
 }) {
   return (
     <main className="employee-home">
-      <PageHeader title="おはようございます">{dateLabel}</PageHeader>
+      <PageHeader context={dateLabel} status={attendance.stateLabel} title="今日の勤怠">
+        現在の状態を確認し、次の打刻を記録します。
+      </PageHeader>
       <AttendancePanel initialState={attendance} />
       <section className="home-section">
         <h2>
@@ -32,6 +56,29 @@ function EmployeeHome({
         <EmptyState title="勤務ルールが未設定です">
           労務管理者に勤務ルールの設定を依頼してください。
         </EmptyState>
+      </section>
+      <section className="home-section">
+        <h2>申請と確認</h2>
+        <ul className="employee-attention-list">
+          <li>
+            <Link href="/attendance/me">
+              <span>勤怠修正</span>
+              <strong>{attention.corrections}件が審査待ち</strong>
+            </Link>
+          </li>
+          <li>
+            <Link href="/leave">
+              <span>休暇</span>
+              <strong>{attention.leave}件が審査待ち</strong>
+            </Link>
+          </li>
+          <li>
+            <Link href="/overtime">
+              <span>残業・休日出勤</span>
+              <strong>{attention.overtime}件が審査待ち</strong>
+            </Link>
+          </li>
+        </ul>
       </section>
       <section className="home-section">
         <h2>
@@ -56,10 +103,30 @@ function EmployeeHome({
   );
 }
 
-function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof managementDashboard>> }) {
+function ManagementHome({
+  initialProgress,
+  monthlyProgress,
+  summary,
+}: {
+  initialProgress: WorkflowProgress;
+  monthlyProgress: WorkflowProgress;
+  summary: Awaited<ReturnType<typeof managementDashboard>>;
+}) {
   return (
     <main className="management-home">
-      <PageHeader title="今日の状況">従業員と勤怠の確認が必要な項目をまとめます。</PageHeader>
+      <PageHeader
+        status={
+          monthlyProgress.current ? `次: ${monthlyProgress.current.label}` : "今月の作業は完了"
+        }
+        title="今日の状況"
+      >
+        確認が必要な項目と、次に進める月次業務をまとめます。
+      </PageHeader>
+      {initialProgress.completedCount < initialProgress.totalCount ? (
+        <WorkflowProgressPanel progress={initialProgress} title="初期設定" />
+      ) : (
+        <WorkflowProgressPanel progress={monthlyProgress} title="今月の業務" />
+      )}
       <dl className="dashboard-summary">
         <div>
           <dt>在籍従業員</dt>
@@ -181,6 +248,99 @@ function ManagementHome({ summary }: { summary: Awaited<ReturnType<typeof manage
       </section>
     </main>
   );
+}
+
+async function managementWorkflowProgress(
+  database: AppDatabase,
+  organizationId: string,
+  targetMonth: string,
+  summaryPromise: ReturnType<typeof managementDashboard>,
+) {
+  const [
+    [organization],
+    [linkedEmployees],
+    [activeUsers],
+    [rules],
+    [calendars],
+    [leave],
+    [overtime],
+    [payrollVersions],
+    monthStatus,
+    summary,
+  ] = await Promise.all([
+    database
+      .select({ setupCompletedAt: organizations.setupCompletedAt })
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .limit(1),
+    database
+      .select({ value: count() })
+      .from(employees)
+      .where(
+        and(
+          eq(employees.organizationId, organizationId),
+          ne(employees.status, "terminated"),
+          isNotNull(employees.userId),
+        ),
+      ),
+    database
+      .select({ value: count() })
+      .from(users)
+      .where(and(eq(users.organizationId, organizationId), eq(users.status, "active"))),
+    database
+      .select({ value: count() })
+      .from(workRules)
+      .where(eq(workRules.organizationId, organizationId)),
+    database
+      .select({ value: count() })
+      .from(workCalendarPatterns)
+      .where(
+        and(
+          eq(workCalendarPatterns.organizationId, organizationId),
+          eq(workCalendarPatterns.status, "active"),
+        ),
+      ),
+    database
+      .select({ value: count() })
+      .from(leaveTypes)
+      .where(and(eq(leaveTypes.organizationId, organizationId), eq(leaveTypes.active, true))),
+    database
+      .select({ value: count() })
+      .from(overtimeRequestPolicies)
+      .where(
+        and(
+          eq(overtimeRequestPolicies.organizationId, organizationId),
+          eq(overtimeRequestPolicies.status, "active"),
+        ),
+      ),
+    database
+      .select({ value: count() })
+      .from(payrollExportProfileVersions)
+      .where(eq(payrollExportProfileVersions.organizationId, organizationId)),
+    getAttendanceMonthStatus(database, organizationId, targetMonth),
+    summaryPromise,
+  ]);
+
+  return {
+    initial: initialSetupProgress({
+      calendarReady: calendars.value > 0,
+      leaveReady: leave.value > 0,
+      organizationReady: Boolean(organization?.setupCompletedAt),
+      overtimePolicyReady: overtime.value > 0,
+      peopleReady:
+        summary.activeEmployees > 0 && linkedEmployees.value > 0 && activeUsers.value > 1,
+      workRuleReady: rules.value > 0,
+    }),
+    monthly: monthlyWorkflowProgress({
+      closingStatus: monthStatus.status,
+      openDays: summary.openDays,
+      payrollPublished: payrollVersions.value > 0,
+      pendingCorrections: summary.pendingCorrections,
+      pendingLeaveRequests: summary.pendingLeaveRequests,
+      pendingOvertimeRequests: summary.pendingOvertimeRequests,
+      unresolvedDays: summary.unresolvedDays,
+    }),
+  };
 }
 
 function PublicLanding() {
@@ -309,17 +469,30 @@ export default async function HomePage() {
 
   let employeeHome = (
     <EmployeeHome
+      attention={{ corrections: 0, leave: 0, overtime: 0 }}
       attendance={{ actions: ["clock_in"], stateLabel: "未出勤", workDate: "" }}
       dateLabel="今日"
     />
   );
 
   if (actor.role === "employee") {
-    const [organization] = await database
-      .select({ timezone: organizations.timezone })
-      .from(organizations)
-      .where(eq(organizations.id, actor.organizationId))
-      .limit(1);
+    const [[organization], [employee]] = await Promise.all([
+      database
+        .select({ timezone: organizations.timezone })
+        .from(organizations)
+        .where(eq(organizations.id, actor.organizationId))
+        .limit(1),
+      database
+        .select({ id: employees.id })
+        .from(employees)
+        .where(
+          and(
+            eq(employees.organizationId, actor.organizationId),
+            eq(employees.userId, actor.userId),
+          ),
+        )
+        .limit(1),
+    ]);
     const dateLabel = new Intl.DateTimeFormat("ja-JP", {
       day: "numeric",
       month: "long",
@@ -332,20 +505,69 @@ export default async function HomePage() {
     } catch {
       // The employee record can be linked later by a labor administrator.
     }
-    employeeHome = <EmployeeHome attendance={attendance} dateLabel={dateLabel} />;
+    const attention = employee
+      ? await Promise.all([
+          database
+            .select({ value: count() })
+            .from(attendanceCorrectionRequests)
+            .where(
+              and(
+                eq(attendanceCorrectionRequests.employeeId, employee.id),
+                eq(attendanceCorrectionRequests.status, "pending"),
+              ),
+            ),
+          database
+            .select({ value: count() })
+            .from(leaveRequests)
+            .where(
+              and(eq(leaveRequests.employeeId, employee.id), eq(leaveRequests.status, "pending")),
+            ),
+          database
+            .select({ value: count() })
+            .from(overtimeWorkRequests)
+            .where(
+              and(
+                eq(overtimeWorkRequests.employeeId, employee.id),
+                eq(overtimeWorkRequests.status, "pending"),
+              ),
+            ),
+        ])
+      : [[{ value: 0 }], [{ value: 0 }], [{ value: 0 }]];
+    employeeHome = (
+      <EmployeeHome
+        attention={{
+          corrections: attention[0][0]?.value ?? 0,
+          leave: attention[1][0]?.value ?? 0,
+          overtime: attention[2][0]?.value ?? 0,
+        }}
+        attendance={attendance}
+        dateLabel={dateLabel}
+      />
+    );
   }
 
-  const dashboard =
+  const targetMonth = new Date().toISOString().slice(0, 7);
+  const dashboardPromise =
     actor.role === "employee"
       ? undefined
-      : await managementDashboard(
-          database,
-          actor.organizationId,
-          new Date().toISOString().slice(0, 7),
-        );
+      : managementDashboard(database, actor.organizationId, targetMonth);
+  const [dashboard, progress] = dashboardPromise
+    ? await Promise.all([
+        dashboardPromise,
+        managementWorkflowProgress(database, actor.organizationId, targetMonth, dashboardPromise),
+      ])
+    : [undefined, undefined];
   return (
     <AppShell actor={{ displayName: actor.displayName, role: actor.role }}>
-      {actor.role === "employee" ? employeeHome : <ManagementHome summary={dashboard!} />}
+      {actor.role === "employee" ? (
+        employeeHome
+      ) : (
+        <ManagementHome
+          initialProgress={progress!.initial}
+          monthlyProgress={progress!.monthly}
+          summary={dashboard!}
+        />
+      )}
     </AppShell>
   );
 }

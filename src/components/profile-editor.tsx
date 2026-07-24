@@ -2,7 +2,8 @@
 
 import { FormEvent, useState } from "react";
 
-import { Button, Field, PageHeader, Toast } from "@/components/ui";
+import { useUnsavedChanges } from "@/components/form-state";
+import { AsyncButton, Field, PageHeader, ResultSummary, Toast } from "@/components/ui";
 
 type Profile = {
   contactEmail: string | null;
@@ -29,26 +30,34 @@ const statusLabels = {
 
 export function ProfileEditor({ profile }: { profile: Profile }) {
   const [message, setMessage] = useState<{ text: string; tone: "error" | "success" }>();
+  const [dirty, setDirty] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  useUnsavedChanges(dirty);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSubmitting(true);
     const response = await fetch("/api/profile", {
       body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))),
       headers: { "content-type": "application/json" },
       method: "PATCH",
     });
     const payload = (await response.json()) as { error?: string };
+    setSubmitting(false);
 
     setMessage(
       response.ok
         ? { text: "連絡先を更新しました。", tone: "success" }
         : { text: payload.error ?? "プロフィールを更新できませんでした。", tone: "error" },
     );
+    if (response.ok) setDirty(false);
   }
 
   return (
     <main className="profile-page">
-      <PageHeader title="プロフィール">自分の登録情報を確認します。</PageHeader>
+      <PageHeader status={statusLabels[profile.status]} title="プロフィール">
+        自分の登録情報を確認し、連絡先だけを更新できます。
+      </PageHeader>
       <dl className="profile-list">
         <div>
           <dt>氏名</dt>
@@ -74,24 +83,35 @@ export function ProfileEditor({ profile }: { profile: Profile }) {
       <section className="profile-contact" aria-labelledby="profile-contact-heading">
         <h2 id="profile-contact-heading">連絡先</h2>
         <p>連絡先のみ自分で変更できます。雇用情報の変更は労務管理者へ依頼してください。</p>
-        <form onSubmit={save}>
+        <form onChange={() => setDirty(true)} onSubmit={save}>
           <Field
             defaultValue={profile.contactEmail ?? ""}
+            description="業務連絡に利用する任意のメールアドレスです。"
+            fieldSize="long"
             id="profile-contact-email"
             label="連絡用メール"
             name="contactEmail"
+            optional
             type="email"
           />
           <Field
             defaultValue={profile.phoneNumber ?? ""}
+            example="090-1234-5678"
             id="profile-phone"
             label="電話番号"
             name="phoneNumber"
+            optional
             type="tel"
           />
-          <Button type="submit">連絡先を保存</Button>
+          <AsyncButton pending={submitting} pendingLabel="連絡先を保存しています" type="submit">
+            連絡先を保存
+          </AsyncButton>
         </form>
-        <Toast tone={message?.tone}>{message?.text}</Toast>
+        {message?.tone === "success" ? (
+          <ResultSummary title="連絡先を保存しました">{message.text}</ResultSummary>
+        ) : (
+          <Toast tone={message?.tone}>{message?.text}</Toast>
+        )}
       </section>
     </main>
   );

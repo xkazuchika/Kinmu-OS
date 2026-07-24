@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
-import { Button, EmptyState, PageHeader, Toast } from "@/components/ui";
+import { Button, PageHeader, StatePanel, Toast } from "@/components/ui";
 
 type Notification = {
   createdAt: string;
@@ -108,7 +108,12 @@ export default function NotificationsPage() {
 
   return (
     <main className="registry-page feature-page">
-      <PageHeader title="通知">残業・休日出勤申請の提出、取消、審査結果を確認します。</PageHeader>
+      <PageHeader
+        status={page.unreadCount > 0 ? `未読 ${page.unreadCount}件` : "未読なし"}
+        title="通知"
+      >
+        申請の提出、取消、審査結果を確認し、対応が必要な対象画面へ進みます。
+      </PageHeader>
       <Toast tone="error">{error}</Toast>
       <Toast tone="success">{success}</Toast>
       <section aria-labelledby="notification-list-heading" className="feature-section">
@@ -127,9 +132,9 @@ export default function NotificationsPage() {
           </Button>
         </div>
         {page.items.length === 0 ? (
-          <EmptyState title="通知はありません">
-            申請の状態が変わると、ここに通知されます。
-          </EmptyState>
+          <StatePanel kind="noRecords" title="通知はありません">
+            <p>申請の状態が変わると、ここに通知されます。</p>
+          </StatePanel>
         ) : (
           <ul className="notification-list">
             {page.items.map((notification) => (

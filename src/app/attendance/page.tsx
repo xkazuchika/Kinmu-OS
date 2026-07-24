@@ -4,14 +4,21 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import {
   Button,
-  EmptyState,
+  ConfirmDialog,
+  DisabledReason,
   Field,
   FilterBar,
+  FilterChip,
+  ListHeader,
+  MonthNavigation,
   PageHeader,
+  Pagination,
   SelectField,
+  StatePanel,
+  SubjectContext,
   Table,
+  TaskContext,
   Toast,
-  ConfirmDialog,
 } from "@/components/ui";
 
 type Department = { active: boolean; id: string; name: string };
@@ -130,6 +137,9 @@ export default function AttendanceManagementPage() {
   const [dialog, setDialog] = useState<"close" | "reopen">();
   const [reopenReason, setReopenReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [selectedStatus, setSelectedStatus] = useState("");
   const [selectedRequestStatus, setSelectedRequestStatus] = useState("");
@@ -142,6 +152,7 @@ export default function AttendanceManagementPage() {
     overtimeStatus = selectedOvertimeStatus,
   ) {
     event?.preventDefault();
+    setLoading(true);
     const parameters = event
       ? new URLSearchParams(
           Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>,
@@ -156,6 +167,11 @@ export default function AttendanceManagementPage() {
     setSelectedStatus(parameters.get("status") ?? "");
     setSelectedRequestStatus(parameters.get("requestStatus") ?? "");
     setSelectedOvertimeStatus(parameters.get("overtimeStatus") ?? "");
+    const requestedPage = Number(parameters.get("page") ?? "1");
+    setCurrentPage(
+      Number.isInteger(requestedPage) && requestedPage > 0 && !event ? requestedPage : 1,
+    );
+    window.history.replaceState(null, "", `/attendance?${parameters.toString()}`);
     const [attendanceResponse, departmentResponse, employeeResponse, closingResponse] =
       await Promise.all([
         fetch(`/api/attendance?${parameters}`),
@@ -169,6 +185,8 @@ export default function AttendanceManagementPage() {
     };
     if (!attendanceResponse.ok) {
       setError(payload.error ?? "勤怠一覧を取得できませんでした。");
+      setLoading(false);
+      setHasLoaded(true);
       return;
     }
     setAttendance(payload.attendance ?? []);
@@ -179,6 +197,8 @@ export default function AttendanceManagementPage() {
     const closingPayload = (await closingResponse.json()) as { closing?: Closing; error?: string };
     if (closingResponse.ok) setClosing(closingPayload.closing);
     setError(undefined);
+    setLoading(false);
+    setHasLoaded(true);
   }
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
@@ -226,9 +246,50 @@ export default function AttendanceManagementPage() {
       selectedOvertimeStatus,
     );
   }
+  const pageSize = 50;
+  const totalPages = Math.max(1, Math.ceil(attendance.length / pageSize));
+  const resolvedPage = Math.min(currentPage, totalPages);
+  const visibleAttendance = attendance.slice(
+    (resolvedPage - 1) * pageSize,
+    resolvedPage * pageSize,
+  );
+  function changePage(page: number) {
+    setCurrentPage(page);
+    const parameters = new URLSearchParams(window.location.search);
+    if (page > 1) parameters.set("page", String(page));
+    else parameters.delete("page");
+    window.history.replaceState(null, "", `/attendance?${parameters.toString()}`);
+    window.scrollTo({ behavior: "smooth", top: 0 });
+  }
   return (
     <main className="registry-page">
-      <PageHeader title="勤怠一覧">月・部署・従業員・未退勤で勤務実績を確認します。</PageHeader>
+      <PageHeader
+        context={selectedMonth}
+        status={closing?.period.status === "closed" ? "締め済み" : "編集中"}
+        title="勤怠一覧"
+      >
+        対象月の勤務実績を確認し、未退勤や未解決の勤務日を月次締め前に解消します。
+      </PageHeader>
+      <SubjectContext
+        items={[
+          { label: "対象月", value: selectedMonth },
+          { label: "締め状態", value: closing?.period.status === "closed" ? "締め済み" : "編集中" },
+          { label: "表示件数", value: loading ? "読込中" : `${attendance.length}件` },
+        ]}
+      />
+      <MonthNavigation
+        month={selectedMonth}
+        onChange={(month) => {
+          setSelectedMonth(month);
+          void load(
+            undefined,
+            month,
+            selectedStatus,
+            selectedRequestStatus,
+            selectedOvertimeStatus,
+          );
+        }}
+      />
       <div className="registry-actions">
         <Link href="/attendance/rules">勤務ルール</Link>
       </div>
@@ -307,7 +368,11 @@ export default function AttendanceManagementPage() {
         </FilterBar>
       </form>
       {closing ? (
-        <section aria-labelledby="attendance-closing-title" className="attendance-closing">
+        <section
+          aria-labelledby="attendance-closing-title"
+          className="attendance-closing"
+          id="monthly-closing"
+        >
           <div className="attendance-closing__heading">
             <div>
               <p className="attendance-closing__label">{closing.month} 月次勤怠</p>
@@ -357,6 +422,23 @@ export default function AttendanceManagementPage() {
             </>
           ) : (
             <>
+              <TaskContext
+                blockers={[
+                  ...(closing.blockers.openDays
+                    ? [`未退勤が${closing.blockers.openDays}件あります。`]
+                    : []),
+                  ...(closing.blockers.pendingCorrections +
+                    closing.blockers.pendingLeaveRequests +
+                    closing.blockers.pendingOvertimeRequests >
+                  0
+                    ? ["審査待ちの申請があります。"]
+                    : []),
+                  ...(closing.blockers.unresolvedDays
+                    ? [`未解決の勤務日が${closing.blockers.unresolvedDays}件あります。`]
+                    : []),
+                ]}
+                completion={`${closing.month}を締め、確定した勤務実績を出力できる状態にします。`}
+              />
               <dl className="attendance-closing__summary">
                 <div>
                   <dt>従業員</dt>
@@ -413,6 +495,11 @@ export default function AttendanceManagementPage() {
                 </div>
               </dl>
               {!closing.ended ? <p>対象月の終了後に締められます。</p> : null}
+              {!closing.canClose || !closing.ended ? (
+                <DisabledReason>
+                  月次締めは、対象月が終了し、すべての阻害要因を解消すると実行できます。
+                </DisabledReason>
+              ) : null}
               {closing.blockers.openDays ? (
                 <Link href={`/attendance?month=${closing.month}&status=open`}>未退勤を確認</Link>
               ) : null}
@@ -454,98 +541,131 @@ export default function AttendanceManagementPage() {
           )}
         </section>
       ) : null}
-      {attendance.length === 0 ? (
-        <EmptyState
+      <ListHeader filteredCount={visibleAttendance.length} totalCount={attendance.length}>
+        {selectedStatus ? <FilterChip>状態: {selectedStatus}</FilterChip> : null}
+        {selectedRequestStatus ? <FilterChip>残業申請: {selectedRequestStatus}</FilterChip> : null}
+        {selectedOvertimeStatus ? (
+          <FilterChip>実績差異: {selectedOvertimeStatus}</FilterChip>
+        ) : null}
+      </ListHeader>
+      {loading ? (
+        <StatePanel kind="noRecords" title="勤怠一覧を読み込んでいます">
+          <p>対象月の勤務実績と締め状態を確認しています。</p>
+        </StatePanel>
+      ) : attendance.length === 0 ? (
+        <StatePanel
           action={
             <Button onClick={() => void load()} variant="secondary">
-              選択月を読み込む
+              条件を変えずに再読み込み
             </Button>
           }
-          title="勤怠が表示されていません"
+          kind={
+            hasLoaded && (selectedStatus || selectedRequestStatus || selectedOvertimeStatus)
+              ? "noSearchResults"
+              : "noRecords"
+          }
+          title={
+            hasLoaded && (selectedStatus || selectedRequestStatus || selectedOvertimeStatus)
+              ? "条件に一致する勤怠はありません"
+              : "この月の勤怠実績はありません"
+          }
         >
-          条件を指定して一覧を表示してください。
-        </EmptyState>
+          <p>
+            {selectedStatus || selectedRequestStatus || selectedOvertimeStatus
+              ? "絞り込み条件を変更して、もう一度確認してください。"
+              : "従業員が打刻すると、勤務実績がここに表示されます。"}
+          </p>
+        </StatePanel>
       ) : (
-        <Table label="勤怠一覧">
-          <thead>
-            <tr>
-              <th>勤務日</th>
-              <th>従業員</th>
-              <th>部署</th>
-              <th>状態</th>
-              <th>勤務予定の根拠</th>
-              <th>休暇・欠勤</th>
-              <th>実労働</th>
-              <th>所定</th>
-              <th>残業</th>
-              <th>残業申請</th>
-              <th>実績差異</th>
-              <th>確認</th>
-            </tr>
-          </thead>
-          <tbody>
-            {attendance.map((day) => (
-              <tr key={`${day.employeeId}-${day.workDate}`}>
-                <td>{day.workDate}</td>
-                <td>{day.displayName}</td>
-                <td>{day.departmentName}</td>
-                <td>{operationalStatusLabels[day.operationalStatus]}</td>
-                <td>{day.calendarLabel}</td>
-                <td>
-                  {day.leaveTypeName
-                    ? `${day.leaveTypeName} ${(day.leaveUnits ?? 0) / 2}日（${minutes(day.leaveScheduledMinutes)}）`
-                    : day.absenceReason
-                      ? `欠勤：${day.absenceReason}`
-                      : "—"}
-                </td>
-                <td>{minutes(day.workedMinutes)}</td>
-                <td>{minutes(day.scheduledMinutes)}</td>
-                <td>{minutes(day.overtimeMinutes)}</td>
-                <td>
-                  {day.overtimeApplicationIds.length
-                    ? day.overtimeApplicationStatuses
-                        .map((requestStatus) => requestStatusLabels[requestStatus])
-                        .join("、")
-                    : "—"}
-                  {day.overtimeRequestedMinutes !== null ? (
-                    <>
-                      <br />
-                      <small>承認申請 {minutes(day.overtimeRequestedMinutes)}</small>
-                    </>
-                  ) : null}
-                </td>
-                <td>
-                  {day.overtimeReconciliationStatus
-                    ? reconciliationLabels[day.overtimeReconciliationStatus]
-                    : "—"}
-                  {day.overtimeDifferenceMinutes !== null ? (
-                    <>
-                      <br />
-                      <small>
-                        実績 {minutes(day.overtimeActualMinutes)}・差分{" "}
-                        {day.overtimeDifferenceMinutes}分
-                      </small>
-                    </>
-                  ) : null}
-                </td>
-                <td>
-                  {day.overtimeApplicationIds.length ? (
-                    <Link href={`/overtime/reviews?requestId=${day.overtimeApplicationIds[0]}`}>
-                      残業申請を確認
-                    </Link>
-                  ) : day.operationalStatus === "unresolved" ||
-                    day.operationalStatus === "open_punch" ? (
-                    <Link href="/attendance/corrections">勤怠申請を確認</Link>
-                  ) : day.operationalStatus === "conflict" ? (
-                    <Link href="/leave/reviews">休暇審査を確認</Link>
-                  ) : (
-                    "—"
-                  )}
-                </td>
+        <>
+          <Table label="勤怠一覧" responsive>
+            <thead>
+              <tr>
+                <th>勤務日</th>
+                <th>従業員</th>
+                <th>部署</th>
+                <th>状態</th>
+                <th>勤務予定の根拠</th>
+                <th>休暇・欠勤</th>
+                <th>実労働</th>
+                <th>所定</th>
+                <th>残業</th>
+                <th>残業申請</th>
+                <th>実績差異</th>
+                <th>確認</th>
               </tr>
-            ))}
-          </tbody>
-        </Table>
+            </thead>
+            <tbody>
+              {visibleAttendance.map((day) => (
+                <tr key={`${day.employeeId}-${day.workDate}`}>
+                  <td data-label="勤務日">{day.workDate}</td>
+                  <td data-label="従業員">{day.displayName}</td>
+                  <td data-label="部署">{day.departmentName}</td>
+                  <td data-label="状態">{operationalStatusLabels[day.operationalStatus]}</td>
+                  <td data-label="勤務予定の根拠">{day.calendarLabel}</td>
+                  <td data-label="休暇・欠勤">
+                    {day.leaveTypeName
+                      ? `${day.leaveTypeName} ${(day.leaveUnits ?? 0) / 2}日（${minutes(day.leaveScheduledMinutes)}）`
+                      : day.absenceReason
+                        ? `欠勤：${day.absenceReason}`
+                        : "—"}
+                  </td>
+                  <td data-label="実労働">{minutes(day.workedMinutes)}</td>
+                  <td data-label="所定">{minutes(day.scheduledMinutes)}</td>
+                  <td data-label="残業">{minutes(day.overtimeMinutes)}</td>
+                  <td data-label="残業申請">
+                    {day.overtimeApplicationIds.length
+                      ? day.overtimeApplicationStatuses
+                          .map((requestStatus) => requestStatusLabels[requestStatus])
+                          .join("、")
+                      : "—"}
+                    {day.overtimeRequestedMinutes !== null ? (
+                      <>
+                        <br />
+                        <small>承認申請 {minutes(day.overtimeRequestedMinutes)}</small>
+                      </>
+                    ) : null}
+                  </td>
+                  <td data-label="実績差異">
+                    {day.overtimeReconciliationStatus
+                      ? reconciliationLabels[day.overtimeReconciliationStatus]
+                      : "—"}
+                    {day.overtimeDifferenceMinutes !== null ? (
+                      <>
+                        <br />
+                        <small>
+                          実績 {minutes(day.overtimeActualMinutes)}・差分{" "}
+                          {day.overtimeDifferenceMinutes}分
+                        </small>
+                      </>
+                    ) : null}
+                  </td>
+                  <td data-label="確認">
+                    {day.overtimeApplicationIds.length ? (
+                      <Link href={`/overtime/reviews?requestId=${day.overtimeApplicationIds[0]}`}>
+                        残業申請を確認
+                      </Link>
+                    ) : day.operationalStatus === "unresolved" ||
+                      day.operationalStatus === "open_punch" ? (
+                      <Link href="/attendance/corrections">勤怠申請を確認</Link>
+                    ) : day.operationalStatus === "conflict" ? (
+                      <Link href="/leave/reviews">休暇審査を確認</Link>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+          {totalPages > 1 ? (
+            <Pagination
+              currentPage={resolvedPage}
+              onPageChange={changePage}
+              totalPages={totalPages}
+            />
+          ) : null}
+        </>
       )}
       <ConfirmDialog
         confirmDisabled={submitting || (dialog === "reopen" && reopenReason.trim().length < 5)}

@@ -2,14 +2,19 @@
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
+import { useUnsavedChanges } from "@/components/form-state";
 import {
+  AsyncButton,
   Button,
   ConfirmDialog,
+  Disclosure,
   EmptyState,
   Field,
   PageHeader,
+  ResultSummary,
   SelectField,
   Table,
+  TaskContext,
   Toast,
 } from "@/components/ui";
 
@@ -52,6 +57,8 @@ export default function OvertimeSettingsPage() {
   const [success, setSuccess] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  useUnsavedChanges(dirty);
   const template = editing ?? policies.find((policy) => policy.status === "active");
   const suggestedEffectiveFrom =
     editing?.effectiveFrom ?? (template ? nextDate(template.effectiveFrom) : defaultDate());
@@ -100,6 +107,7 @@ export default function OvertimeSettingsPage() {
       setError(String(result.error ?? "設定を保存できませんでした。"));
       return;
     }
+    setDirty(false);
     setSuccess("残業申請設定をドラフト保存しました。");
     await load();
   }
@@ -145,11 +153,22 @@ export default function OvertimeSettingsPage() {
 
   return (
     <main className="registry-page feature-page">
-      <PageHeader title="残業申請設定">
+      <PageHeader
+        status={
+          policies.some((policy) => policy.status === "active")
+            ? "有効な設定あり"
+            : "有効な設定なし"
+        }
+        title="残業申請設定"
+      >
         申請単位・事前申請・実績差異と月次締めの扱いを適用日付きで管理します。
       </PageHeader>
+      <TaskContext
+        completion="ドラフトを保存し、影響範囲を確認して従業員へ有効化します。"
+        prerequisites={["適用開始日より前の締め済み月には反映されません。"]}
+      />
       <Toast tone="error">{error}</Toast>
-      <Toast tone="success">{success}</Toast>
+      {success ? <ResultSummary title="残業申請設定を更新しました">{success}</ResultSummary> : null}
       <section aria-labelledby="overtime-policy-edit-heading" className="feature-section">
         <div>
           <h2 id="overtime-policy-edit-heading">設定ドラフト</h2>
@@ -161,10 +180,12 @@ export default function OvertimeSettingsPage() {
           <form
             className="feature-form"
             key={editing ? `${editing.id}:${editing.version}` : `new:${template?.id ?? "default"}`}
+            onChange={() => setDirty(true)}
             onSubmit={save}
           >
             <Field
               defaultValue={suggestedEffectiveFrom}
+              description="この日以降の申請と実績差異に使われます。"
               id="policy-effective"
               label="適用開始日"
               name="effectiveFrom"
@@ -185,41 +206,49 @@ export default function OvertimeSettingsPage() {
               <option value="30">30分</option>
             </SelectField>
             <Field
+              constraint="0分以上、1,440分以下で入力してください。"
               defaultValue={template?.allowedDeviationMinutes ?? 15}
               id="policy-deviation"
-              label="実績差異の許容（分）"
+              label="実績差異の許容"
               max="1440"
               min="0"
               name="allowedDeviationMinutes"
               required
               type="number"
+              unit="分"
             />
-            <label className="feature-check">
-              <input
-                defaultChecked={template?.requirePriorApproval ?? false}
-                name="requirePriorApproval"
-                type="checkbox"
-              />
-              <span>
-                <strong>事前申請を必須にする</strong>
-                <small>予定開始を過ぎた申請を受け付けません。</small>
-              </span>
-            </label>
-            <label className="feature-check">
-              <input
-                defaultChecked={template?.blockCloseOnUnresolvedDifference ?? false}
-                name="blockCloseOnUnresolvedDifference"
-                type="checkbox"
-              />
-              <span>
-                <strong>未解決差異がある月を締めない</strong>
-                <small>超過・実績なし・未申請実績を締め前の阻害要因にします。</small>
-              </span>
-            </label>
+            <Disclosure summary="詳細設定">
+              <label className="feature-check">
+                <input
+                  defaultChecked={template?.requirePriorApproval ?? false}
+                  name="requirePriorApproval"
+                  type="checkbox"
+                />
+                <span>
+                  <strong>事前申請を必須にする</strong>
+                  <small>予定開始を過ぎた申請を受け付けません。</small>
+                </span>
+              </label>
+              <label className="feature-check">
+                <input
+                  defaultChecked={template?.blockCloseOnUnresolvedDifference ?? false}
+                  name="blockCloseOnUnresolvedDifference"
+                  type="checkbox"
+                />
+                <span>
+                  <strong>未解決差異がある月を締めない</strong>
+                  <small>超過・実績なし・未申請実績を締め前の阻害要因にします。</small>
+                </span>
+              </label>
+            </Disclosure>
             <div className="form-actions">
-              <Button disabled={submitting} type="submit">
+              <AsyncButton
+                pending={submitting}
+                pendingLabel="ドラフトを保存しています"
+                type="submit"
+              >
                 ドラフトを保存
-              </Button>
+              </AsyncButton>
               <Button
                 ref={activationButtonRef}
                 disabled={submitting || !editing}
@@ -239,7 +268,7 @@ export default function OvertimeSettingsPage() {
           <p>勤務日には、その日に有効な最新設定が使われます。</p>
         </div>
         {policies.length ? (
-          <Table label="残業申請ポリシー履歴">
+          <Table label="残業申請ポリシー履歴" responsive>
             <thead>
               <tr>
                 <th>状態</th>
@@ -253,18 +282,20 @@ export default function OvertimeSettingsPage() {
             <tbody>
               {policies.map((policy) => (
                 <tr key={policy.id}>
-                  <td>
+                  <td data-label="状態">
                     <span
                       className={`status-pill status-pill--${policy.status === "active" ? "approved" : "pending"}`}
                     >
                       {statusLabels[policy.status]}
                     </span>
                   </td>
-                  <td>{policy.effectiveFrom}</td>
-                  <td>{policy.minuteIncrement}分</td>
-                  <td>{policy.requirePriorApproval ? "必須" : "事後可"}</td>
-                  <td>±{policy.allowedDeviationMinutes}分</td>
-                  <td>{policy.blockCloseOnUnresolvedDifference ? "有効" : "無効"}</td>
+                  <td data-label="適用開始">{policy.effectiveFrom}</td>
+                  <td data-label="入力単位">{policy.minuteIncrement}分</td>
+                  <td data-label="事前申請">{policy.requirePriorApproval ? "必須" : "事後可"}</td>
+                  <td data-label="許容差異">±{policy.allowedDeviationMinutes}分</td>
+                  <td data-label="締め阻害">
+                    {policy.blockCloseOnUnresolvedDifference ? "有効" : "無効"}
+                  </td>
                 </tr>
               ))}
             </tbody>

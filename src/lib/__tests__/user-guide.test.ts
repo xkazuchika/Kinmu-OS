@@ -75,6 +75,33 @@ describe("user guide catalog", () => {
     expect(payroll).toContain("給与計算結果ではなく");
   });
 
+  it("keeps major workflow articles action-oriented", async () => {
+    const majorSlugs = [
+      "admin-setup",
+      "employee-attendance",
+      "leave-requests",
+      "monthly-closing",
+      "overtime-requests",
+      "payroll-exports",
+    ];
+    const requiredHeadings = [
+      "## 画面の目的",
+      "## 入力項目",
+      "## 完了条件",
+      "## 次の操作",
+      "## トラブル対処",
+    ];
+
+    for (const slug of majorSlugs) {
+      const guide = guideCatalog.find((entry) => entry.slug === slug);
+      expect(guide, slug).toBeTruthy();
+      const markdown = await readFile(path.join(GUIDE_ROOT, guide!.file), "utf8");
+      for (const heading of requiredHeadings) {
+        expect(markdown, `${guide!.file}: ${heading}`).toContain(heading);
+      }
+    }
+  });
+
   it("includes guide Markdown in the production standalone output", async () => {
     const config = await readFile(path.join(process.cwd(), "next.config.ts"), "utf8");
     expect(config).toContain('output: "standalone"');

@@ -14,7 +14,7 @@ export type GuideEntry = Readonly<{
   title: string;
 }>;
 
-export const GUIDE_VERSION = "0.6.0";
+export const GUIDE_VERSION = "0.7.0";
 export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
@@ -209,11 +209,13 @@ export function guidesForRole(role: GuideRole) {
     ],
   };
   const preferredOrder = new Map(preferred[role].map((slug, index) => [slug, index]));
-  return [...guideCatalog].sort((left, right) => {
-    const leftPriority = preferredOrder.get(left.slug) ?? preferred[role].length + left.order;
-    const rightPriority = preferredOrder.get(right.slug) ?? preferred[role].length + right.order;
-    return leftPriority - rightPriority;
-  });
+  return guideCatalog
+    .filter((entry) => (entry.roles as readonly GuideRole[]).includes(role))
+    .sort((left, right) => {
+      const leftPriority = preferredOrder.get(left.slug) ?? preferred[role].length + left.order;
+      const rightPriority = preferredOrder.get(right.slug) ?? preferred[role].length + right.order;
+      return leftPriority - rightPriority;
+    });
 }
 
 export function guideForSlug(slug: string) {

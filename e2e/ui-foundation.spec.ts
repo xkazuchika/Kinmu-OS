@@ -249,12 +249,129 @@ test("desktop user management shell and confirmation are accessible", async ({ p
   expect(consoleProblems).toEqual([]);
 });
 
+test("guided navigation preserves context and protects unfinished forms", async ({ page }) => {
+  const consoleProblems = collectConsoleProblems(page);
+  await page.setViewportSize({ height: 1058, width: 1488 });
+  await login(page, owner.email, owner.password);
+
+  await expect(page.getByRole("navigation", { name: "メインメニュー" })).toBeVisible();
+  await expect(page.locator(".workflow-progress")).toBeVisible();
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v07-admin-home-desktop.png" });
+  await page.goto("/attendance?month=2026-07");
+  await expect(page.getByText("対象月の勤務実績を確認し").first()).toBeVisible();
+  await expect(page.getByText("勤怠一覧を読み込んでいます")).toBeHidden();
+  await expect(page.getByRole("navigation", { name: "ページを移動" })).toBeVisible();
+  expect(
+    await page.getByRole("table", { name: "勤怠一覧" }).getByRole("row").count(),
+  ).toBeLessThanOrEqual(51);
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v07-attendance-desktop.png" });
+
+  await page.goto("/attendance?month=2026-07&status=open");
+  await expect(page.getByRole("link", { name: "この画面の使い方" })).toBeVisible();
+
+  await page.getByRole("link", { name: "この画面の使い方" }).click();
+  await expect(page).toHaveURL(/\/guide\/monthly-closing\?returnTo=/);
+  await expect(page.getByRole("link", { name: /元の画面へ戻る/ })).toBeVisible();
+  await page.getByRole("link", { name: /元の画面へ戻る/ }).click();
+  await expect(page).toHaveURL(/\/attendance\?month=2026-07&status=open$/);
+
+  await page.goto("/attendance/rules");
+  await expect(page.getByRole("heading", { level: 1, name: "勤務ルール" })).toBeVisible();
+  const nameField = page.getByLabel("ルール名");
+  const startField = page.getByLabel("所定開始");
+  await expect(nameField).toBeVisible();
+  await nameField.fill(`未保存ルール-${runId}`);
+  const [nameBox, startBox] = await Promise.all([
+    nameField.boundingBox(),
+    startField.boundingBox(),
+  ]);
+  expect(nameBox!.height).toBeGreaterThanOrEqual(44);
+  expect(startBox!.height).toBeGreaterThanOrEqual(44);
+  expect(nameBox!.width).toBeGreaterThan(startBox!.width);
+  await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v07-work-rule-desktop.png" });
+
+  await page.getByRole("button", { name: "日々の勤怠" }).click();
+  await page.getByRole("link", { name: "勤怠状況" }).click();
+  const unsavedDialog = page.getByRole("alertdialog", { name: "未保存の変更があります" });
+  await expect(unsavedDialog).toBeVisible();
+  await unsavedDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(nameField).toHaveValue(`未保存ルール-${runId}`);
+  await page.getByRole("link", { name: "勤怠状況" }).click();
+  await unsavedDialog.getByRole("button", { name: "変更を破棄して移動" }).click();
+  await expect(page).toHaveURL(/\/attendance(?:\?month=\d{4}-\d{2})?$/);
+
+  await page.setViewportSize({ height: 844, width: 320 });
+  await page.getByRole("button", { name: "すべて" }).click();
+  const drawer = page.getByRole("dialog", { name: "すべてのメニュー" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("button", { name: /閉じる/ })).toBeFocused();
+  await page.screenshot({ fullPage: false, path: "/tmp/kinmu-v07-menu-mobile.png" });
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  expect(consoleProblems).toEqual([]);
+});
+
+test("major management screens keep their purpose and fit narrow viewports", async ({ page }) => {
+  const consoleProblems = collectConsoleProblems(page);
+  await login(page, owner.email, owner.password);
+  await page.setViewportSize({ height: 844, width: 320 });
+
+  const routes = [
+    "/",
+    "/employees",
+    "/employees/departments",
+    "/employees/import",
+    "/settings/users",
+    "/attendance",
+    "/attendance/rules",
+    "/attendance/corrections",
+    "/calendar",
+    "/leave/manage",
+    "/leave/reviews",
+    "/overtime/settings",
+    "/overtime/reviews",
+    "/reports",
+    "/audit",
+    "/payroll-exports",
+    "/payroll-exports/profiles",
+    "/payroll-exports/inspect",
+    "/payroll-exports/runs",
+    "/notifications",
+    "/profile",
+    "/guide",
+    "/about",
+  ];
+
+  for (const route of routes) {
+    await page.goto(route);
+    await expect(page.locator("main h1").first(), route).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      route,
+    ).toBe(true);
+    await expect(page.locator("nextjs-portal"), route).toHaveCount(0);
+  }
+
+  await page.setViewportSize({ height: 900, width: 768 });
+  for (const route of ["/attendance", "/employees", "/overtime/settings", "/guide"]) {
+    await page.goto(route);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      route,
+    ).toBe(true);
+  }
+  expect(consoleProblems).toEqual([]);
+});
+
 test("employee home and records work at 320 CSS pixels", async ({ page }) => {
   const consoleProblems = collectConsoleProblems(page);
   await page.setViewportSize({ height: 720, width: 320 });
   await login(page, employee.email, employee.password);
 
-  await expect(page.getByRole("heading", { level: 1, name: "おはようございます" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "今日の勤怠" })).toBeVisible();
   if (await page.getByRole("button", { name: "休憩を終了" }).isVisible()) {
     await page.getByRole("button", { name: "休憩を終了" }).click();
   }
@@ -461,6 +578,19 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
       ?.id ?? "";
   expect(managedEmployeeId).not.toBe("");
 
+  const staleResponse = await page.request.get(
+    `/api/attendance/correction-reviews?status=pending&employeeId=${managedEmployeeId}&from=${targetMonth}-01&to=${nextMonthStart}`,
+  );
+  expect(staleResponse.ok()).toBe(true);
+  const staleRequests = (await staleResponse.json()) as { requests: Array<{ id: string }> };
+  for (const staleRequest of staleRequests.requests) {
+    const reviewResponse = await page.request.patch(
+      `/api/attendance/correction-reviews/${staleRequest.id}`,
+      { data: { decision: "approve" } },
+    );
+    expect(reviewResponse.ok()).toBe(true);
+  }
+
   const stateResponse = await page.request.get(`/api/attendance/closing?month=${targetMonth}`);
   expect(stateResponse.ok()).toBe(true);
   const state = (await stateResponse.json()) as {
@@ -484,7 +614,7 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
 
   await page.goto("/attendance");
   await page.getByLabel("対象月").fill(targetMonth);
-  await page.getByRole("button", { name: "表示" }).click();
+  await page.getByRole("button", { exact: true, name: "表示" }).click();
   await expect(page.getByText(`${targetMonth} 月次勤怠`)).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "編集中" })).toBeVisible();
   await expect(
@@ -498,7 +628,7 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
   await approvePendingCorrection();
   await page.goto("/attendance");
   await page.getByLabel("対象月").fill(targetMonth);
-  await page.getByRole("button", { name: "表示" }).click();
+  await page.getByRole("button", { exact: true, name: "表示" }).click();
   await page.getByRole("button", { name: "この月を締める" }).click();
   const closeDialog = page.getByRole("alertdialog", { name: `${targetMonth}を締めますか？` });
   await expect(closeDialog.getByText("締め後は勤怠を修正できません。")).toBeVisible();
@@ -522,7 +652,7 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
   await page.setViewportSize({ height: 900, width: 1440 });
   await page.goto("/attendance");
   await page.getByLabel("対象月").fill(targetMonth);
-  await page.getByRole("button", { name: "表示" }).click();
+  await page.getByRole("button", { exact: true, name: "表示" }).click();
   await page.getByRole("button", { name: "締めを再開" }).click();
   const reopenDialog = page.getByRole("alertdialog", { name: "月次勤怠を再開しますか？" });
   await reopenDialog.getByLabel("再開理由（5文字以上）").fill("確定前の勤務内容を再確認するため");
@@ -536,7 +666,7 @@ test("HR closes, reopens, and recloses a finished attendance month", async ({ pa
   await approvePendingCorrection();
   await page.goto("/attendance");
   await page.getByLabel("対象月").fill(targetMonth);
-  await page.getByRole("button", { name: "表示" }).click();
+  await page.getByRole("button", { exact: true, name: "表示" }).click();
   await page.getByRole("button", { name: "この月を締める" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "締めて確定" }).click();
   await expect(page.getByText("月次勤怠を締めました。")).toBeVisible();
@@ -912,14 +1042,14 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/guide\/admin-setup$/);
   await expect(page.getByRole("heading", { level: 1, name: "初期設定と従業員管理" })).toBeVisible();
-  await expect(page.getByLabel("現在地")).toContainText("利用ガイド");
+  await expect(page.locator(".guide-breadcrumb")).toContainText("利用ガイド");
   await expect(page.getByText("対象役割所有者・労務管理者")).toBeVisible();
   await page.getByRole("link", { name: "ガイド一覧へ戻る" }).click();
   await expect(page).toHaveURL(/\/guide$/);
   const articleHrefs = await page
     .locator(".guide-card")
     .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute("href")));
-  expect(articleHrefs).toHaveLength(14);
+  expect(articleHrefs).toHaveLength(13);
   for (const href of articleHrefs) {
     expect(href).toBeTruthy();
     const response = await page.goto(href!);
@@ -938,6 +1068,9 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   await page.setViewportSize({ height: 720, width: 320 });
   await page.goto("/guide");
   await expect(page.getByText("ログイン中の役割: 従業員")).toBeVisible();
+  const forbiddenGuide = await page.goto("/guide/admin-setup");
+  expect(forbiddenGuide?.status()).toBe(404);
+  await page.goto("/guide");
   await expect(page.locator(".guide-card").first()).toContainText("残業・休日出勤申請");
   await page.locator(".guide-card").first().click();
   await expect(page).toHaveURL(/\/guide\/overtime-requests$/);
@@ -945,7 +1078,7 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
     true,
   );
   await expect(page.getByRole("heading", { level: 1, name: "残業・休日出勤申請" })).toBeVisible();
-  await expect(page.getByLabel("現在地")).toContainText("残業・休日出勤申請");
+  await expect(page.locator(".guide-breadcrumb")).toContainText("残業・休日出勤申請");
   await page.screenshot({ fullPage: true, path: "/tmp/kinmu-guide-mobile.png" });
   expect(consoleProblems.filter((problem) => !problem.includes("status of 404"))).toEqual([]);
 });
@@ -976,7 +1109,7 @@ test("employee overtime request, HR review, notification, and difference work at
   await expect(page.getByRole("heading", { level: 1, name: "残業申請設定" })).toBeVisible();
   await page.getByLabel("適用開始日").fill(workDate);
   await page.getByLabel("時刻の入力単位").selectOption("15");
-  await page.getByLabel("実績差異の許容（分）").fill("15");
+  await page.getByLabel("実績差異の許容").fill("15");
   await page.getByRole("button", { exact: true, name: "ドラフトを保存" }).click();
   await expect(page.getByText("残業申請設定をドラフト保存しました。")).toBeVisible();
   await page.getByRole("button", { name: "影響を確認して有効化" }).click();
@@ -991,8 +1124,8 @@ test("employee overtime request, HR review, notification, and difference work at
   await expect(page.getByRole("heading", { level: 1, name: "残業・休日出勤" })).toBeVisible();
   await page.getByLabel("勤務日").fill(workDate);
   await page.getByLabel("予定開始").fill("18:00");
-  await page.getByLabel("予定終了（翌日可）").fill("19:00");
-  await page.getByLabel("予定休憩（分）").fill("0");
+  await page.getByLabel("予定終了").fill("19:00");
+  await page.getByLabel("予定休憩").fill("0");
   await page.getByLabel("申請理由").fill("E2E残業申請の確認");
   const headingLevels = await page
     .locator("main h1, main h2, main h3")

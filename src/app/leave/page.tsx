@@ -2,14 +2,19 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
+import { useUnsavedChanges } from "@/components/form-state";
 import {
+  AsyncButton,
   Button,
   ConfirmDialog,
   EmptyState,
   Field,
   PageHeader,
+  ResultSummary,
   SelectField,
+  StatePanel,
   Table,
+  TaskContext,
   TextareaField,
   Toast,
 } from "@/components/ui";
@@ -89,6 +94,8 @@ export default function MyLeavePage() {
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  useUnsavedChanges(dirty);
 
   const load = useCallback(async () => {
     const [typeResponse, ledgerResponse] = await Promise.all([
@@ -162,6 +169,7 @@ export default function MyLeavePage() {
     }
     setPreview(undefined);
     setDraft(undefined);
+    setDirty(false);
     setSuccess("休暇を申請しました。残高は審査待ち分を予約済みです。");
     await load();
   }
@@ -189,9 +197,25 @@ export default function MyLeavePage() {
 
   return (
     <main className="registry-page feature-page">
-      <PageHeader title="休暇">残高を確認し、全日・半日の休暇を申請できます。</PageHeader>
+      <PageHeader
+        status={balances.length > 0 ? `${balances.length}種類の残高` : "残高未付与"}
+        title="休暇"
+      >
+        利用可能な残高と対象勤務日を確認して、全日・半日の休暇を申請します。
+      </PageHeader>
+      <TaskContext
+        completion="対象勤務日と申請後の残高を確認し、休暇申請を審査へ提出します。"
+        prerequisites={["休暇種別と利用可能残高を確認してください。"]}
+      />
       <Toast tone="error">{error}</Toast>
-      <Toast tone="success">{success}</Toast>
+      {success ? (
+        <ResultSummary
+          action={<a href="#leave-history-heading">申請履歴で確認</a>}
+          title="休暇申請を提出しました"
+        >
+          {success} 審査待ちの申請として保存されました。
+        </ResultSummary>
+      ) : null}
 
       <section className="feature-section" aria-labelledby="my-leave-balance-heading">
         <div>
@@ -199,9 +223,9 @@ export default function MyLeavePage() {
           <p>利用可能残高には、審査待ち申請の予約分が反映されています。</p>
         </div>
         {balances.length === 0 ? (
-          <EmptyState title="休暇残高がありません">
-            管理者による付与後、ここに表示されます。
-          </EmptyState>
+          <StatePanel kind="notConfigured" title="休暇残高がありません">
+            <p>管理者が休暇を付与すると、利用可能な日数がここに表示されます。</p>
+          </StatePanel>
         ) : (
           <dl className="balance-grid">
             {balances.map((balance) => (
@@ -227,8 +251,14 @@ export default function MyLeavePage() {
           <h2 id="leave-request-heading">休暇を申請</h2>
           <p>休日は自動で除外され、送信前に対象勤務日と申請後残高を確認できます。</p>
         </div>
-        <form className="feature-form" onSubmit={previewRequest}>
-          <SelectField id="request-leave-type" label="休暇種別" name="leaveTypeId" required>
+        <form className="feature-form" onChange={() => setDirty(true)} onSubmit={previewRequest}>
+          <SelectField
+            description="有給・無給と、残高を消費する種別かを確認してください。"
+            id="request-leave-type"
+            label="休暇種別"
+            name="leaveTypeId"
+            required
+          >
             <option value="">選択してください</option>
             {leaveTypes.map((leaveType) => (
               <option key={leaveType.id} value={leaveType.id}>
@@ -236,12 +266,19 @@ export default function MyLeavePage() {
               </option>
             ))}
           </SelectField>
-          <SelectField id="request-unit" label="申請単位" name="unit" required>
+          <SelectField
+            description="半日は0.5日として残高から差し引かれます。"
+            id="request-unit"
+            label="申請単位"
+            name="unit"
+            required
+          >
             <option value="full_day">全日</option>
             <option value="half_day">半日</option>
           </SelectField>
           <Field
             defaultValue={today()}
+            description="休日は送信前の確認で自動的に除外されます。"
             id="request-from"
             label="開始日"
             name="from"
@@ -257,6 +294,8 @@ export default function MyLeavePage() {
             type="date"
           />
           <TextareaField
+            constraint="500文字以内で入力してください。"
+            example="私用のため"
             id="request-reason"
             label="申請理由"
             maxLength={500}
@@ -264,9 +303,13 @@ export default function MyLeavePage() {
             required
             rows={3}
           />
-          <Button disabled={submitting} type="submit">
+          <AsyncButton
+            pending={submitting}
+            pendingLabel="対象日と残高を確認しています"
+            type="submit"
+          >
             対象日と残高を確認
-          </Button>
+          </AsyncButton>
         </form>
       </section>
 
@@ -280,7 +323,7 @@ export default function MyLeavePage() {
             休暇申請を送信するとここに表示されます。
           </EmptyState>
         ) : (
-          <Table label="休暇申請履歴">
+          <Table label="休暇申請履歴" responsive>
             <thead>
               <tr>
                 <th>申請日</th>
@@ -293,13 +336,15 @@ export default function MyLeavePage() {
             <tbody>
               {requests.map((request) => (
                 <tr key={request.id}>
-                  <td>{new Date(request.createdAt).toLocaleDateString("ja-JP")}</td>
-                  <td>
+                  <td data-label="申請日">
+                    {new Date(request.createdAt).toLocaleDateString("ja-JP")}
+                  </td>
+                  <td data-label="休暇">
                     {request.leaveTypeName}
                     <br />
                     <small>{request.leaveTypeCode}</small>
                   </td>
-                  <td>
+                  <td data-label="理由">
                     {request.reason}
                     {request.reviewComment ? (
                       <>
@@ -308,12 +353,12 @@ export default function MyLeavePage() {
                       </>
                     ) : null}
                   </td>
-                  <td>
+                  <td data-label="状態">
                     <span className={`status-pill status-pill--${request.status}`}>
                       {statusLabels[request.status]}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="操作">
                     {request.status === "pending" ? (
                       <Button
                         disabled={submitting}
