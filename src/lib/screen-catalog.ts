@@ -79,7 +79,8 @@ export type ScreenDefinition = Readonly<{
 }>;
 
 const managerRoles = ["owner", "hr_admin"] as const;
-const allRoles = ["owner", "hr_admin", "employee"] as const;
+const selfRoles = ["approver", "employee"] as const;
+const allRoles = ["owner", "hr_admin", "approver", "employee"] as const;
 
 const managementNavigation: RoleNavigation = {
   home: { href: "/", icon: "home", id: "home", label: "ホーム" },
@@ -99,6 +100,18 @@ const managementNavigation: RoleNavigation = {
       icon: "shield",
       label: "申請と審査",
       items: [
+        {
+          href: "/approvals",
+          icon: "shield",
+          id: "approval-inbox",
+          label: "承認受信箱",
+        },
+        {
+          href: "/approvals/proxy",
+          icon: "report",
+          id: "approval-proxy",
+          label: "代理申請",
+        },
         {
           href: "/attendance/corrections",
           icon: "report",
@@ -132,6 +145,18 @@ const managementNavigation: RoleNavigation = {
           icon: "clock",
           id: "overtime-settings",
           label: "残業申請設定",
+        },
+        {
+          href: "/settings/approval-routes",
+          icon: "shield",
+          id: "approval-routes",
+          label: "承認経路",
+        },
+        {
+          href: "/settings/approval-delegations",
+          icon: "shield",
+          id: "approval-delegations",
+          label: "承認引継ぎ",
         },
       ],
     },
@@ -172,7 +197,7 @@ const managementNavigation: RoleNavigation = {
 
 const employeeNavigation: RoleNavigation = {
   home: { href: "/", icon: "home", id: "home", label: "ホーム" },
-  mobile: ["home", "my-attendance", "overtime-request", "notifications"],
+  mobile: ["home", "my-attendance", "request-history", "notifications"],
   groups: [
     {
       id: "my-work",
@@ -192,6 +217,12 @@ const employeeNavigation: RoleNavigation = {
       icon: "report",
       label: "申請",
       items: [
+        {
+          href: "/requests",
+          icon: "report",
+          id: "request-history",
+          label: "申請履歴",
+        },
         {
           href: "/attendance/corrections",
           icon: "report",
@@ -218,6 +249,27 @@ const employeeNavigation: RoleNavigation = {
         { href: "/about", icon: "help", id: "about", label: "このソフト" },
       ],
     },
+  ],
+};
+
+const approverNavigation: RoleNavigation = {
+  home: { href: "/", icon: "home", id: "home", label: "ホーム" },
+  mobile: ["home", "approval-inbox", "my-attendance", "notifications"],
+  groups: [
+    {
+      id: "my-approvals",
+      icon: "shield",
+      label: "承認業務",
+      items: [
+        {
+          href: "/approvals",
+          icon: "shield",
+          id: "approval-inbox",
+          label: "承認受信箱",
+        },
+      ],
+    },
+    ...employeeNavigation.groups,
   ],
 };
 
@@ -311,7 +363,7 @@ export const screenCatalog = [
     pattern: "/attendance/me",
     title: "勤務実績",
     area: "勤務",
-    roles: ["employee"],
+    roles: selfRoles,
     purpose: "月ごとの実労働、所定時間、残業を確認します。",
     completion: "必要な日を確認し、修正申請へ進める",
     primaryAction: "対象月を確認",
@@ -383,7 +435,7 @@ export const screenCatalog = [
     pattern: "/leave",
     title: "休暇",
     area: "申請",
-    roles: ["employee"],
+    roles: selfRoles,
     purpose: "休暇残高を確認して、全日または半日の休暇を申請します。",
     completion: "提出後の審査待ち状態を確認できる",
     primaryAction: "休暇を申請",
@@ -419,12 +471,96 @@ export const screenCatalog = [
     pattern: "/overtime",
     title: "残業・休日出勤",
     area: "申請",
-    roles: ["employee"],
+    roles: selfRoles,
     purpose: "勤務予定を確認して残業または休日出勤を申請します。",
     completion: "提出後の審査状態と実績差異を確認できる",
     primaryAction: "残業・休日出勤を申請",
     guideSlug: "overtime-requests",
     navigationId: "overtime-request",
+  },
+  {
+    id: "request-detail",
+    pattern: "/requests/[caseId]",
+    title: "申請詳細",
+    area: "申請",
+    roles: selfRoles,
+    purpose: "申請状態、差し戻し理由、各改訂を確認し、必要なら修正して再申請します。",
+    completion: "審査結果を確認するか、差し戻しを再申請できる",
+    primaryAction: "申請内容を確認",
+    guideSlug: "overview",
+    navigationId: "request-history",
+  },
+  {
+    id: "request-history",
+    pattern: "/requests",
+    title: "申請履歴",
+    area: "申請",
+    roles: selfRoles,
+    purpose: "自分が対象の全申請と代理作成された申請をまとめて確認します。",
+    completion: "確認または修正が必要な申請を選べる",
+    primaryAction: "申請履歴を確認",
+    guideSlug: "overview",
+    navigationId: "request-history",
+  },
+  {
+    id: "approval-case",
+    pattern: "/approvals/[caseId]",
+    title: "承認申請の詳細",
+    area: "申請と審査",
+    roles: ["owner", "hr_admin", "approver"],
+    purpose: "申請内容、担当、期限、改訂履歴を確認して審査します。",
+    completion: "承認、却下、差し戻しの結果を確認できる",
+    primaryAction: "申請内容を審査",
+    guideSlug: "overview",
+    navigationId: "approval-inbox",
+  },
+  {
+    id: "approval-proxy",
+    pattern: "/approvals/proxy",
+    title: "代理申請",
+    area: "申請と審査",
+    roles: managerRoles,
+    purpose: "対象従業員と代理理由を明記し、本人と同じ検証で申請を作成します。",
+    completion: "対象者・実際の作成者・代理理由を分けて記録できる",
+    primaryAction: "代理申請を作成",
+    guideSlug: "overview",
+    navigationId: "approval-proxy",
+  },
+  {
+    id: "approval-inbox",
+    pattern: "/approvals",
+    title: "承認受信箱",
+    area: "申請と審査",
+    roles: ["owner", "hr_admin", "approver"],
+    purpose: "勤怠修正、休暇、残業・休日出勤の承認待ちを横断して確認します。",
+    completion: "次に対応する申請を選び、審査へ進める",
+    primaryAction: "対応可能な申請を確認",
+    guideSlug: "overview",
+    navigationId: "approval-inbox",
+  },
+  {
+    id: "approval-routes",
+    pattern: "/settings/approval-routes",
+    title: "承認経路",
+    area: "従業員・勤務設定",
+    roles: managerRoles,
+    purpose: "部署と申請種別ごとの承認担当者、適用期間、期限を設定します。",
+    completion: "重複のない経路を保存し、適用範囲を確認できる",
+    primaryAction: "承認経路を追加",
+    guideSlug: "admin-setup",
+    navigationId: "approval-routes",
+  },
+  {
+    id: "approval-delegations",
+    pattern: "/settings/approval-delegations",
+    title: "承認引継ぎ",
+    area: "従業員・勤務設定",
+    roles: managerRoles,
+    purpose: "担当者の不在期間だけ新規申請を代理担当者へ割り当てます。",
+    completion: "期間と理由を保存し、必要な既存申請だけを再割当できる",
+    primaryAction: "引継ぎ対象を確認",
+    guideSlug: "admin-setup",
+    navigationId: "approval-delegations",
   },
   {
     id: "payroll-mappings",
@@ -551,7 +687,7 @@ export const screenCatalog = [
     pattern: "/profile",
     title: "プロフィール",
     area: "自分の情報",
-    roles: ["employee"],
+    roles: selfRoles,
     purpose: "自分の表示名と連絡先を確認・更新します。",
     completion: "保存結果を確認できる",
     primaryAction: "プロフィールを保存",
@@ -597,7 +733,9 @@ export const screenCatalog = [
 ] as const satisfies readonly ScreenDefinition[];
 
 export function navigationForRole(role: GuideRole): RoleNavigation {
-  return role === "employee" ? employeeNavigation : managementNavigation;
+  if (role === "employee") return employeeNavigation;
+  if (role === "approver") return approverNavigation;
+  return managementNavigation;
 }
 
 export function screenPathMatches(pattern: string, pathname: string) {
@@ -610,11 +748,12 @@ export function screenPathMatches(pattern: string, pathname: string) {
 }
 
 export function screenForPath(pathname: string, role: GuideRole) {
-  return screenCatalog.find(
+  const matches = screenCatalog.filter(
     (screen) =>
       (screen.roles as readonly GuideRole[]).includes(role) &&
       screenPathMatches(screen.pattern, pathname),
   );
+  return matches.find((screen) => !screen.pattern.includes("[")) ?? matches[0];
 }
 
 export function navigationGroupForItem(role: GuideRole, itemId: string) {

@@ -20,6 +20,8 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       entries?: Array<{ occurredAt?: string; originalEventId?: null | string; type?: string }>;
+      employeeId?: string;
+      proxyReason?: string;
       reason?: string;
       workDate?: string;
     };
@@ -31,6 +33,8 @@ export async function POST(request: Request) {
         originalEventId: entry.originalEventId,
         type: entry.type ?? "",
       })),
+      employeeId: body.employeeId || undefined,
+      proxyReason: body.proxyReason,
       reason: body.reason ?? "",
       workDate: body.workDate ?? "",
     });

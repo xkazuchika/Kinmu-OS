@@ -60,6 +60,7 @@ export async function POST(request: Request) {
     const actor = await requireActor(database, request);
     const input = {
       endTime: String(body.endTime ?? ""),
+      employeeId: body.employeeId ? String(body.employeeId) : undefined,
       kind: kind(body.kind),
       plannedBreakMinutes: breakMinutes(body.plannedBreakMinutes),
       startTime: String(body.startTime ?? ""),
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
         {
           result: await createOvertimeWorkRequest(database, actor, {
             ...input,
+            proxyReason: String(body.proxyReason ?? ""),
             reason: String(body.reason ?? ""),
           }),
         },

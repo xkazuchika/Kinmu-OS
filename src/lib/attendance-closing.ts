@@ -164,7 +164,7 @@ export async function inspectAttendanceMonth(
       .where(
         and(
           eq(leaveRequests.organizationId, organizationId),
-          eq(leaveRequests.status, "pending"),
+          inArray(leaveRequests.status, ["pending", "returned"]),
           gte(leaveRequestDays.workDate, range.from),
           lt(leaveRequestDays.workDate, range.to),
         ),
@@ -175,7 +175,7 @@ export async function inspectAttendanceMonth(
       .where(
         and(
           eq(overtimeWorkRequests.organizationId, organizationId),
-          eq(overtimeWorkRequests.status, "pending"),
+          inArray(overtimeWorkRequests.status, ["pending", "returned"]),
           gte(overtimeWorkRequests.workDate, range.from),
           lt(overtimeWorkRequests.workDate, range.to),
         ),
@@ -199,7 +199,7 @@ export async function inspectAttendanceMonth(
           eq(attendanceCorrectionRequests.organizationId, organizationId),
           gte(attendanceCorrectionRequests.workDate, range.from),
           lt(attendanceCorrectionRequests.workDate, range.to),
-          eq(attendanceCorrectionRequests.status, "pending"),
+          inArray(attendanceCorrectionRequests.status, ["pending", "returned"]),
         ),
       ),
     db

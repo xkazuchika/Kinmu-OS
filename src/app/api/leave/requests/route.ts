@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       throw new LeaveRequestValidationError("休暇単位が正しくありません。");
     }
     const input = {
+      employeeId: body.employeeId ? String(body.employeeId) : undefined,
       from: String(body.from ?? ""),
       leaveTypeId: String(body.leaveTypeId ?? ""),
       to: String(body.to ?? ""),
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
         {
           result: await createLeaveRequest(database, actor, {
             ...input,
+            proxyReason: String(body.proxyReason ?? ""),
             reason: String(body.reason ?? ""),
           }),
         },

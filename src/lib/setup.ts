@@ -3,7 +3,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 
 import type { AppDatabase } from "@/lib/db/client";
-import { initialSetupLinks, organizations, users, workCalendarPatterns } from "@/lib/db/schema";
+import {
+  initialSetupLinks,
+  organizations,
+  payrollExportProfiles,
+  users,
+  workCalendarPatterns,
+} from "@/lib/db/schema";
+import { DEFAULT_PAYROLL_EXPORT_PROFILE_CONFIG } from "@/lib/payroll-export-profile";
 import { TimeValidationError, validateOrganizationTimezone } from "@/lib/time";
 
 const SETUP_LINK_LIFETIME_MS = 48 * 60 * 60 * 1000;
@@ -92,6 +99,14 @@ export async function initializeOrganization(db: AppDatabase, input: InitialSetu
       createdByUserId: owner.id,
       effectiveFrom: new Date().toISOString().slice(0, 10),
       organizationId: organization.id,
+    });
+    await transaction.insert(payrollExportProfiles).values({
+      createdByUserId: owner.id,
+      description: "締め済み勤怠を一人一行で出力する未公開の標準ドラフト",
+      draftConfig: DEFAULT_PAYROLL_EXPORT_PROFILE_CONFIG,
+      name: "汎用給与連携",
+      organizationId: organization.id,
+      updatedByUserId: owner.id,
     });
     const token = randomBytes(32).toString("base64url");
     const tokenHash = createHash("sha256").update(token).digest("hex");

@@ -18,6 +18,80 @@ export const PAYROLL_PROFILE_LIMITS = {
   mappedValueLength: 500,
 } as const;
 
+export const DEFAULT_PAYROLL_EXPORT_PROFILE_CONFIG = {
+  schemaVersion: PAYROLL_PROFILE_SCHEMA_VERSION,
+  encoding: "utf8_bom",
+  lineEnding: "crlf",
+  fileNamePattern: "kinmu-payroll-{targetMonth}-r{revision}.csv",
+  columns: [
+    {
+      id: "external_employee_code",
+      header: "従業員コード",
+      source: { kind: "field", field: "external_employee_code" },
+      transform: { kind: "text" },
+      required: true,
+      formulaPolicy: "reject",
+      maxLength: 128,
+    },
+    {
+      id: "employee_number",
+      header: "Kinmu従業員番号",
+      source: { kind: "field", field: "employee_number" },
+      transform: { kind: "text" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+    {
+      id: "display_name",
+      header: "氏名",
+      source: { kind: "field", field: "display_name" },
+      transform: { kind: "text" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+    {
+      id: "scheduled_minutes",
+      header: "所定時間（分）",
+      source: { kind: "field", field: "scheduled_minutes" },
+      transform: { kind: "minutes" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+    {
+      id: "worked_minutes",
+      header: "実働時間（分）",
+      source: { kind: "field", field: "worked_minutes" },
+      transform: { kind: "minutes" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+    {
+      id: "overtime_minutes",
+      header: "残業時間（分）",
+      source: { kind: "field", field: "overtime_minutes" },
+      transform: { kind: "minutes" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+    {
+      id: "leave_units",
+      header: "休暇単位",
+      source: { kind: "field", field: "leave_units" },
+      transform: { kind: "integer" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+    {
+      id: "absence_days",
+      header: "欠勤日数",
+      source: { kind: "field", field: "absence_days" },
+      transform: { kind: "integer" },
+      required: true,
+      formulaPolicy: "reject",
+    },
+  ],
+} satisfies PayrollExportProfileConfig;
+
 export type PayrollFieldValueType = "text" | "integer" | "minutes" | "date" | "year_month" | "enum";
 
 export type PayrollExportField = {

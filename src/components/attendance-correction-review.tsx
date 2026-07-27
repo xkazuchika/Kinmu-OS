@@ -14,7 +14,7 @@ import {
   Toast,
 } from "@/components/ui";
 
-type Status = "approved" | "cancelled" | "pending" | "rejected";
+type Status = "approved" | "cancelled" | "pending" | "rejected" | "returned";
 type RequestRow = {
   createdAt: string;
   displayName: string;
@@ -45,6 +45,7 @@ const statusLabels: Record<Status, string> = {
   cancelled: "取消済み",
   pending: "審査待ち",
   rejected: "却下",
+  returned: "差し戻し",
 };
 const eventLabels: Record<Entry["type"], string> = {
   break_end: "休憩終了",

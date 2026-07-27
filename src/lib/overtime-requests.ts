@@ -1,7 +1,15 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 
 import { assertAttendanceMonthOpen, lockAttendanceMonth } from "@/lib/attendance-closing";
 import { recordAudit } from "@/lib/audit";
+import {
+  appendApprovalRevisionAndResubmit,
+  approvalCaseSelfAccessForDomainRequest,
+  assertDomainApprovalReviewAccess,
+  createApprovalCase,
+  lockApprovalCaseForDomain,
+  syncApprovalCaseStatus,
+} from "@/lib/approval-cases";
 import { can, requirePermission, type SessionActor } from "@/lib/authorization";
 import type { AppDatabase } from "@/lib/db/client";
 import {
@@ -11,7 +19,6 @@ import {
   organizations,
   overtimeWorkRequests,
 } from "@/lib/db/schema";
-import { createOvertimeRequestNotifications } from "@/lib/notifications";
 import { effectiveOvertimePolicy } from "@/lib/overtime-policies";
 import { minutesBetween, workDateFor, type WorkDate } from "@/lib/time";
 import { resolveWorkSchedule, validateWorkDate } from "@/lib/work-calendar";
@@ -110,6 +117,7 @@ export function localDateTimeToInstant(
 export function plannedOvertimeRange(
   input: Readonly<{
     endTime: string;
+    employeeId?: string;
     minuteIncrement: number;
     plannedBreakMinutes: number;
     startTime: string;
@@ -168,6 +176,29 @@ async function activeEmployeeForActor(db: OvertimeQueryDatabase, actor: SessionA
     .limit(1);
   if (!employee) {
     throw new OvertimeRequestValidationError("在籍中の従業員情報を確認できませんでした。");
+  }
+  return employee;
+}
+
+async function activeEmployeeForTarget(
+  db: OvertimeQueryDatabase,
+  actor: SessionActor,
+  employeeId: string,
+) {
+  requirePermission(actor, "approvals:manage");
+  const [employee] = await db
+    .select()
+    .from(employees)
+    .where(
+      and(
+        eq(employees.id, employeeId),
+        eq(employees.organizationId, actor.organizationId),
+        eq(employees.status, "active"),
+      ),
+    )
+    .limit(1);
+  if (!employee) {
+    throw new OvertimeRequestValidationError("在籍中の対象従業員を確認できませんでした。");
   }
   return employee;
 }
@@ -265,6 +296,7 @@ export async function previewOvertimeWorkRequest(
   actor: SessionActor,
   input: Readonly<{
     endTime: string;
+    employeeId?: string;
     kind?: OvertimeRequestKind;
     now?: Date;
     plannedBreakMinutes: number;
@@ -272,7 +304,9 @@ export async function previewOvertimeWorkRequest(
     workDate: string;
   }>,
 ) {
-  const employee = await activeEmployeeForActor(db, actor);
+  const employee = input.employeeId
+    ? await activeEmployeeForTarget(db, actor, input.employeeId)
+    : await activeEmployeeForActor(db, actor);
   return {
     employee,
     ...(await buildOvertimePreview(db, {
@@ -314,9 +348,11 @@ export async function createOvertimeWorkRequest(
   actor: SessionActor,
   input: Readonly<{
     endTime: string;
+    employeeId?: string;
     kind?: OvertimeRequestKind;
     now?: Date;
     plannedBreakMinutes: number;
+    proxyReason?: string;
     reason: string;
     startTime: string;
     workDate: string;
@@ -327,7 +363,9 @@ export async function createOvertimeWorkRequest(
   return db.transaction(async (transaction) => {
     await lockAttendanceMonth(transaction, actor.organizationId, workDate.slice(0, 7));
     await assertAttendanceMonthOpen(transaction, actor.organizationId, workDate);
-    const employee = await activeEmployeeForActor(transaction, actor);
+    const employee = input.employeeId
+      ? await activeEmployeeForTarget(transaction, actor, input.employeeId)
+      : await activeEmployeeForActor(transaction, actor);
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext(${`${employee.id}:${workDate}:overtime`}))`,
     );
@@ -377,6 +415,32 @@ export async function createOvertimeWorkRequest(
         },
       })
       .returning();
+    await createApprovalCase(transaction, {
+      employeeId: employee.id,
+      organizationId: actor.organizationId,
+      reference: {
+        overtimeWorkRequestId: request.id,
+        requestType: request.kind,
+      },
+      snapshot: {
+        calendarSnapshot: request.calendarSnapshot,
+        employeeId: request.employeeId,
+        plannedBreakMinutes: request.plannedBreakMinutes,
+        plannedEndAt: request.plannedEndAt.toISOString(),
+        plannedMinutes: request.plannedMinutes,
+        plannedStartAt: request.plannedStartAt.toISOString(),
+        policyId: request.policyId,
+        reason: request.reason,
+        requestId: request.id,
+        requestType: request.kind,
+        workDate: request.workDate,
+        workRuleSnapshot: request.workRuleSnapshot,
+      },
+      proxyReason: input.employeeId ? input.proxyReason : null,
+      submittedByUserId: actor.userId,
+      submittedOnBehalf: Boolean(input.employeeId),
+      targetDate: workDate,
+    });
     await recordAudit(transaction, {
       action: "overtime_request_submitted",
       actorUserId: actor.userId,
@@ -394,8 +458,141 @@ export async function createOvertimeWorkRequest(
       },
       organizationId: actor.organizationId,
     });
-    await createOvertimeRequestNotifications(transaction, { event: "submitted", request });
     return { employee, preview, request };
+  });
+}
+
+export async function resubmitOvertimeWorkRequest(
+  db: AppDatabase,
+  actor: SessionActor,
+  requestId: string,
+  input: Readonly<{
+    endTime: string;
+    expectedCaseVersion: number;
+    expectedVersion: number;
+    kind?: OvertimeRequestKind;
+    now?: Date;
+    plannedBreakMinutes: number;
+    reason: string;
+    startTime: string;
+    workDate: string;
+  }>,
+) {
+  const reason = required(input.reason, "申請理由");
+  const workDate = validateWorkDate(input.workDate);
+  const selfAccess = await approvalCaseSelfAccessForDomainRequest(db, actor, {
+    overtimeWorkRequestId: requestId,
+  });
+  const approvalCaseId = selfAccess.approvalCase.id;
+
+  return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      overtimeWorkRequestId: requestId,
+    });
+    await lockAttendanceMonth(transaction, actor.organizationId, workDate.slice(0, 7));
+    await assertAttendanceMonthOpen(transaction, actor.organizationId, workDate);
+    const employee =
+      selfAccess.targetEmployeeUserId === actor.userId
+        ? await activeEmployeeForActor(transaction, actor)
+        : await activeEmployeeForTarget(
+            transaction,
+            actor,
+            selfAccess.approvalCase.targetEmployeeId,
+          );
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${`${employee.id}:${workDate}:overtime`}))`,
+    );
+    const [current] = await transaction
+      .select()
+      .from(overtimeWorkRequests)
+      .where(
+        and(
+          eq(overtimeWorkRequests.id, requestId),
+          eq(overtimeWorkRequests.organizationId, actor.organizationId),
+          eq(overtimeWorkRequests.employeeId, employee.id),
+          eq(overtimeWorkRequests.status, "returned"),
+          eq(overtimeWorkRequests.version, input.expectedVersion),
+        ),
+      )
+      .limit(1);
+    if (!current) throw new OvertimeRequestConflictError();
+    const preview = await buildOvertimePreview(transaction, {
+      ...input,
+      employeeId: employee.id,
+      organizationId: actor.organizationId,
+      workDate,
+    });
+    const duplicate = await overlappingRequest(transaction, {
+      employeeId: employee.id,
+      exceptRequestId: requestId,
+      organizationId: actor.organizationId,
+      plannedEndAt: preview.range.plannedEndAt,
+      plannedStartAt: preview.range.plannedStartAt,
+    });
+    if (duplicate) {
+      throw new OvertimeRequestValidationError(
+        "同じ時間帯に審査待ちまたは承認済みの申請があります。",
+      );
+    }
+    const [request] = await transaction
+      .update(overtimeWorkRequests)
+      .set({
+        calendarSnapshot: {
+          calendarLabel: preview.schedule.calendarLabel,
+          calendarSource: preview.schedule.calendarSource,
+          dayKind: preview.schedule.dayKind,
+        },
+        kind: preview.kind,
+        plannedBreakMinutes: input.plannedBreakMinutes,
+        plannedEndAt: preview.range.plannedEndAt,
+        plannedMinutes: preview.range.plannedMinutes,
+        plannedStartAt: preview.range.plannedStartAt,
+        policyId: preview.policy.id,
+        reason,
+        reviewComment: null,
+        reviewedAt: null,
+        reviewerUserId: null,
+        status: "pending",
+        updatedAt: new Date(),
+        version: current.version + 1,
+        workDate,
+        workRuleSnapshot: {
+          scheduledBreakMinutes: preview.schedule.scheduledBreakMinutes,
+          scheduledEndTime: preview.schedule.scheduledEndTime,
+          scheduledMinutes: preview.schedule.scheduledMinutes,
+          scheduledStartTime: preview.schedule.scheduledStartTime,
+          workRuleId: preview.schedule.workRuleId,
+          workRuleName: preview.schedule.workRuleName,
+        },
+      })
+      .where(
+        and(
+          eq(overtimeWorkRequests.id, requestId),
+          eq(overtimeWorkRequests.status, "returned"),
+          eq(overtimeWorkRequests.version, input.expectedVersion),
+        ),
+      )
+      .returning();
+    if (!request) throw new OvertimeRequestConflictError();
+    const approvalCase = await appendApprovalRevisionAndResubmit(transaction, actor, {
+      approvalCaseId,
+      expectedVersion: input.expectedCaseVersion,
+      snapshot: {
+        calendarSnapshot: request.calendarSnapshot,
+        employeeId: request.employeeId,
+        plannedBreakMinutes: request.plannedBreakMinutes,
+        plannedEndAt: request.plannedEndAt.toISOString(),
+        plannedMinutes: request.plannedMinutes,
+        plannedStartAt: request.plannedStartAt.toISOString(),
+        policyId: request.policyId,
+        reason: request.reason,
+        requestId: request.id,
+        requestType: request.kind,
+        workDate: request.workDate,
+        workRuleSnapshot: request.workRuleSnapshot,
+      },
+    });
+    return { approvalCase, request };
   });
 }
 
@@ -452,8 +649,25 @@ export async function cancelOvertimeWorkRequest(
   requestId: string,
   expectedVersion: number,
 ) {
-  const request = await getOwnOvertimeWorkRequest(db, actor, requestId);
+  const selfAccess = await approvalCaseSelfAccessForDomainRequest(db, actor, {
+    overtimeWorkRequestId: requestId,
+  });
+  const [request] = await db
+    .select()
+    .from(overtimeWorkRequests)
+    .where(
+      and(
+        eq(overtimeWorkRequests.id, requestId),
+        eq(overtimeWorkRequests.organizationId, actor.organizationId),
+        eq(overtimeWorkRequests.employeeId, selfAccess.approvalCase.targetEmployeeId),
+      ),
+    )
+    .limit(1);
+  if (!request) throw new OvertimeRequestValidationError("申請を確認できませんでした。");
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      overtimeWorkRequestId: requestId,
+    });
     await lockAttendanceMonth(transaction, actor.organizationId, request.workDate.slice(0, 7));
     await transaction.execute(
       sql`SELECT id FROM ${overtimeWorkRequests} WHERE id = ${requestId} FOR UPDATE`,
@@ -465,11 +679,15 @@ export async function cancelOvertimeWorkRequest(
         and(
           eq(overtimeWorkRequests.id, requestId),
           eq(overtimeWorkRequests.organizationId, actor.organizationId),
-          eq(overtimeWorkRequests.requestedByUserId, actor.userId),
+          eq(overtimeWorkRequests.employeeId, selfAccess.approvalCase.targetEmployeeId),
         ),
       )
       .limit(1);
-    if (!current || current.status !== "pending" || current.version !== expectedVersion) {
+    if (
+      !current ||
+      (current.status !== "pending" && current.status !== "returned") ||
+      current.version !== expectedVersion
+    ) {
       throw new OvertimeRequestConflictError();
     }
     await assertAttendanceMonthOpen(transaction, actor.organizationId, current.workDate);
@@ -484,12 +702,22 @@ export async function cancelOvertimeWorkRequest(
       .where(
         and(
           eq(overtimeWorkRequests.id, current.id),
-          eq(overtimeWorkRequests.status, "pending"),
+          or(
+            eq(overtimeWorkRequests.status, "pending"),
+            eq(overtimeWorkRequests.status, "returned"),
+          ),
           eq(overtimeWorkRequests.version, expectedVersion),
         ),
       )
       .returning();
     if (!cancelled) throw new OvertimeRequestConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: current.status,
+      organizationId: actor.organizationId,
+      reference: { overtimeWorkRequestId: cancelled.id },
+      status: "cancelled",
+    });
     await recordAudit(transaction, {
       action: "overtime_request_cancelled",
       actorUserId: actor.userId,
@@ -497,10 +725,6 @@ export async function cancelOvertimeWorkRequest(
       entityType: "overtime_work_request",
       metadata: { employeeId: cancelled.employeeId, workDate: cancelled.workDate },
       organizationId: actor.organizationId,
-    });
-    await createOvertimeRequestNotifications(transaction, {
-      event: "cancelled",
-      request: cancelled,
     });
     return cancelled;
   });
@@ -653,12 +877,18 @@ async function reviewOvertimeRequest(
   actor: SessionActor,
   input: Readonly<{
     action: "approve" | "reject";
+    approvalCaseVersion?: number;
     comment?: string;
     expectedVersion: number;
     requestId: string;
   }>,
 ) {
-  requirePermission(actor, "attendance:manage");
+  await assertDomainApprovalReviewAccess(
+    db,
+    actor,
+    { overtimeWorkRequestId: input.requestId },
+    input.approvalCaseVersion,
+  );
   const reviewComment =
     input.action === "reject" ? required(input.comment ?? "", "却下理由") : null;
   const [preflight] = await db
@@ -673,6 +903,9 @@ async function reviewOvertimeRequest(
     .limit(1);
   if (!preflight) throw new OvertimeRequestValidationError("申請を確認できませんでした。");
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      overtimeWorkRequestId: input.requestId,
+    });
     await lockAttendanceMonth(transaction, actor.organizationId, preflight.workDate.slice(0, 7));
     await transaction.execute(
       sql`SELECT id FROM ${overtimeWorkRequests} WHERE id = ${input.requestId} FOR UPDATE`,
@@ -711,6 +944,16 @@ async function reviewOvertimeRequest(
       )
       .returning();
     if (!reviewed) throw new OvertimeRequestConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: "pending",
+      expectedVersion: input.approvalCaseVersion,
+      organizationId: actor.organizationId,
+      reference: { overtimeWorkRequestId: reviewed.id },
+      reviewComment,
+      reviewerUserId: actor.userId,
+      status: input.action === "approve" ? "approved" : "rejected",
+    });
     const auditAction =
       input.action === "approve" ? "overtime_request_approved" : "overtime_request_rejected";
     await recordAudit(transaction, {
@@ -732,11 +975,6 @@ async function reviewOvertimeRequest(
       },
       organizationId: actor.organizationId,
     });
-    await createOvertimeRequestNotifications(transaction, {
-      event: input.action === "approve" ? "approved" : "rejected",
-      request: reviewed,
-      reviewComment,
-    });
     return reviewed;
   });
 }
@@ -746,9 +984,11 @@ export async function approveOvertimeWorkRequest(
   actor: SessionActor,
   requestId: string,
   expectedVersion: number,
+  approvalCaseVersion?: number,
 ) {
   return reviewOvertimeRequest(db, actor, {
     action: "approve",
+    approvalCaseVersion,
     expectedVersion,
     requestId,
   });
@@ -760,9 +1000,11 @@ export async function rejectOvertimeWorkRequest(
   requestId: string,
   expectedVersion: number,
   comment: string,
+  approvalCaseVersion?: number,
 ) {
   return reviewOvertimeRequest(db, actor, {
     action: "reject",
+    approvalCaseVersion,
     comment,
     expectedVersion,
     requestId,

@@ -1,14 +1,26 @@
 import { and, eq } from "drizzle-orm";
 
-import { AuthorizationError, requireActor, requirePermission } from "@/lib/authorization";
+import {
+  AuthorizationError,
+  requireActor,
+  requirePermission,
+  type SessionActor,
+} from "@/lib/authorization";
 import { recordAudit } from "@/lib/audit";
 import { getDatabase } from "@/lib/db/client";
 import { users } from "@/lib/db/schema";
-import { setUserEnabled, setUserRole, UserManagementError } from "@/lib/users";
+import {
+  type ManagedUserRole,
+  setUserEnabled,
+  setUserRole,
+  UserManagementError,
+} from "@/lib/users";
 
-function canAssignRole(actorRole: "owner" | "hr_admin" | "employee", role: string) {
+const managedUserRoles = ["owner", "hr_admin", "approver", "employee"] as const;
+
+function canAssignRole(actorRole: SessionActor["role"], role: string): role is ManagedUserRole {
   return (
-    ["owner", "hr_admin", "employee"].includes(role) &&
+    (managedUserRoles as readonly string[]).includes(role) &&
     !(actorRole === "hr_admin" && role === "owner")
   );
 }
@@ -55,7 +67,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
     if (body.role && canAssignRole(actor.role, body.role)) {
       const user = await setUserRole(database, {
         organizationId: actor.organizationId,
-        role: body.role as "owner" | "hr_admin" | "employee",
+        role: body.role,
         userId,
       });
 

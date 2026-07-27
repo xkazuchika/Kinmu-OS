@@ -1,3 +1,5 @@
+import { ApprovalCaseConflictError, ApprovalCaseValidationError } from "@/lib/approval-cases";
+import { ApprovalRouteConflictError, ApprovalRouteValidationError } from "@/lib/approval-routing";
 import {
   AttendanceClosingConflictError,
   AttendanceClosingValidationError,
@@ -46,6 +48,8 @@ export function domainErrorResponse(error: unknown, fallback: string) {
   }
   if (
     error instanceof AttendanceClosingConflictError ||
+    error instanceof ApprovalCaseConflictError ||
+    error instanceof ApprovalRouteConflictError ||
     error instanceof LeaveLedgerConflictError ||
     error instanceof LeaveRequestConflictError ||
     error instanceof OvertimePolicyConflictError ||
@@ -81,6 +85,8 @@ export function domainErrorResponse(error: unknown, fallback: string) {
   }
   if (
     error instanceof AttendanceClosingValidationError ||
+    error instanceof ApprovalCaseValidationError ||
+    error instanceof ApprovalRouteValidationError ||
     error instanceof LeaveLedgerValidationError ||
     error instanceof LeaveRequestValidationError ||
     error instanceof NotificationValidationError ||

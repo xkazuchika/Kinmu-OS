@@ -2,7 +2,13 @@ import { and, count, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 
 import { AuthorizationError, can, type SessionActor } from "@/lib/authorization";
 import type { AppDatabase } from "@/lib/db/client";
-import { notifications, overtimeWorkRequests, users } from "@/lib/db/schema";
+import {
+  approvalCases,
+  employees,
+  notifications,
+  overtimeWorkRequests,
+  users,
+} from "@/lib/db/schema";
 
 type NotificationDatabase = Pick<AppDatabase, "insert" | "select" | "update">;
 type OvertimeRequest = typeof overtimeWorkRequests.$inferSelect;
@@ -172,6 +178,65 @@ export async function notificationTarget(
     )
     .limit(1);
   if (!notification) throw new AuthorizationError();
+  if (notification.entityType === "approval_case") {
+    const [approvalCase] = await db
+      .select({
+        assignedApproverUserId: approvalCases.assignedApproverUserId,
+        id: approvalCases.id,
+        submittedByUserId: approvalCases.submittedByUserId,
+        submittedOnBehalf: approvalCases.submittedOnBehalf,
+        targetEmployeeUserId: employees.userId,
+      })
+      .from(approvalCases)
+      .innerJoin(employees, eq(employees.id, approvalCases.targetEmployeeId))
+      .where(
+        and(
+          eq(approvalCases.id, notification.entityId),
+          eq(approvalCases.organizationId, actor.organizationId),
+        ),
+      )
+      .limit(1);
+    if (!approvalCase) {
+      return {
+        available: false,
+        href: "/notifications",
+        message: "対象を確認できません。",
+      } as const;
+    }
+    if (
+      can(actor, "approvals:manage") ||
+      (can(actor, "approvals:review") && approvalCase.assignedApproverUserId === actor.userId)
+    ) {
+      return {
+        available: true,
+        href: `/approvals/${encodeURIComponent(approvalCase.id)}`,
+        message: null,
+      } as const;
+    }
+    if (approvalCase.targetEmployeeUserId === actor.userId) {
+      return {
+        available: true,
+        href: `/requests/${encodeURIComponent(approvalCase.id)}`,
+        message: null,
+      } as const;
+    }
+    if (
+      approvalCase.submittedOnBehalf &&
+      approvalCase.submittedByUserId === actor.userId &&
+      can(actor, "approvals:manage")
+    ) {
+      return {
+        available: true,
+        href: `/approvals/${encodeURIComponent(approvalCase.id)}`,
+        message: null,
+      } as const;
+    }
+    return {
+      available: false,
+      href: "/notifications",
+      message: "現在の権限では対象を開けません。",
+    } as const;
+  }
   if (notification.entityType !== "overtime_work_request") {
     return { available: false, href: "/notifications", message: "対象を開けません。" } as const;
   }

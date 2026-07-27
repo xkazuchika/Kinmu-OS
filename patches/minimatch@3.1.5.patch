@@ -1,0 +1,15 @@
+diff --git a/minimatch.js b/minimatch.js
+index 2eb6f6e..5ef53fa 100644
+--- a/minimatch.js
++++ b/minimatch.js
+@@ -7,7 +7,9 @@ var path = (function () { try { return require('path') } catch (e) {}}()) || {
+ minimatch.sep = path.sep
+
+ var GLOBSTAR = minimatch.GLOBSTAR = Minimatch.GLOBSTAR = {}
+-var expand = require('brace-expansion')
++var braceExpansion = require('brace-expansion')
++// brace-expansion >=5 exposes the function as a named export in CommonJS.
++var expand = braceExpansion.expand || braceExpansion.default || braceExpansion
+
+ var plTypes = {
+   '!': { open: '(?:(?!(?:', close: '))[^/]*?)'},

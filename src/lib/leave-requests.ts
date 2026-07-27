@@ -2,8 +2,16 @@ import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { assertAttendanceMonthOpen, lockAttendanceMonth } from "@/lib/attendance-closing";
 import { recordAudit } from "@/lib/audit";
+import {
+  appendApprovalRevisionAndResubmit,
+  approvalCaseSelfAccessForDomainRequest,
+  assertDomainApprovalReviewAccess,
+  createApprovalCase,
+  lockApprovalCaseForDomain,
+  syncApprovalCaseStatus,
+} from "@/lib/approval-cases";
 import type { SessionActor } from "@/lib/authorization";
-import { requireEmployeeScope, requirePermission } from "@/lib/authorization";
+import { AuthorizationError, requireEmployeeScope, requirePermission } from "@/lib/authorization";
 import type { AppDatabase } from "@/lib/db/client";
 import {
   absenceRecords,
@@ -85,6 +93,23 @@ async function employeeForActor(db: LeaveQueryDatabase, actor: SessionActor) {
   return employee;
 }
 
+async function employeeForTarget(db: LeaveQueryDatabase, actor: SessionActor, employeeId: string) {
+  requirePermission(actor, "approvals:manage");
+  const [employee] = await db
+    .select()
+    .from(employees)
+    .where(
+      and(
+        eq(employees.id, employeeId),
+        eq(employees.organizationId, actor.organizationId),
+        eq(employees.status, "active"),
+      ),
+    )
+    .limit(1);
+  if (!employee) throw new AuthorizationError();
+  return employee;
+}
+
 async function requestableLeaveType(
   db: LeaveQueryDatabase,
   organizationId: string,
@@ -117,9 +142,17 @@ async function requestableLeaveType(
 export async function previewLeaveRequest(
   db: LeaveQueryDatabase,
   actor: SessionActor,
-  input: { from: string; leaveTypeId: string; to: string; unit: LeaveUnit },
+  input: {
+    employeeId?: string;
+    from: string;
+    leaveTypeId: string;
+    to: string;
+    unit: LeaveUnit;
+  },
 ) {
-  const employee = await employeeForActor(db, actor);
+  const employee = input.employeeId
+    ? await employeeForTarget(db, actor, input.employeeId)
+    : await employeeForActor(db, actor);
   const dates = datesBetween(input.from, input.to);
   if (input.unit === "half_day" && dates.length !== 1) {
     throw new LeaveRequestValidationError("半日休暇は一つの勤務日を指定してください。");
@@ -214,7 +247,15 @@ async function overlappingLeave(
 export async function createLeaveRequest(
   db: AppDatabase,
   actor: SessionActor,
-  input: { from: string; leaveTypeId: string; reason: string; to: string; unit: LeaveUnit },
+  input: {
+    employeeId?: string;
+    from: string;
+    leaveTypeId: string;
+    proxyReason?: string;
+    reason: string;
+    to: string;
+    unit: LeaveUnit;
+  },
 ) {
   const reason = required(input.reason, "申請理由");
   const dates = datesBetween(input.from, input.to);
@@ -262,6 +303,30 @@ export async function createLeaveRequest(
         workDate: day.workDate as WorkDate,
       })),
     );
+    await createApprovalCase(transaction, {
+      employeeId: preview.employee.id,
+      organizationId: actor.organizationId,
+      reference: { leaveRequestId: request.id, requestType: "leave" },
+      snapshot: {
+        days: preview.included.map((day) => ({
+          calendarSource: day.calendarSource,
+          scheduledMinutes: day.scheduledMinutes,
+          units: day.units,
+          workDate: day.workDate,
+        })),
+        employeeId: request.employeeId,
+        leaveTypeCode: request.leaveTypeCode,
+        leaveTypeId: request.leaveTypeId,
+        leaveTypeName: request.leaveTypeName,
+        reason: request.reason,
+        requestId: request.id,
+        requestType: "leave",
+      },
+      proxyReason: input.employeeId ? input.proxyReason : null,
+      submittedByUserId: actor.userId,
+      submittedOnBehalf: Boolean(input.employeeId),
+      targetDate: preview.included[0].workDate,
+    });
     await recordAudit(transaction, {
       action: "leave_requested",
       actorUserId: actor.userId,
@@ -277,7 +342,129 @@ export async function createLeaveRequest(
   });
 }
 
+export async function resubmitLeaveRequest(
+  db: AppDatabase,
+  actor: SessionActor,
+  requestId: string,
+  input: {
+    expectedCaseVersion: number;
+    from: string;
+    leaveTypeId: string;
+    reason: string;
+    to: string;
+    unit: LeaveUnit;
+  },
+) {
+  const reason = required(input.reason, "申請理由");
+  const dates = datesBetween(input.from, input.to);
+  const months = [...new Set(dates.map((date) => date.slice(0, 7)))].sort();
+  const selfAccess = await approvalCaseSelfAccessForDomainRequest(db, actor, {
+    leaveRequestId: requestId,
+  });
+  const approvalCaseId = selfAccess.approvalCase.id;
+  const proxyEmployeeId =
+    selfAccess.targetEmployeeUserId === actor.userId
+      ? undefined
+      : selfAccess.approvalCase.targetEmployeeId;
+
+  return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      leaveRequestId: requestId,
+    });
+    for (const month of months) {
+      await lockAttendanceMonth(transaction, actor.organizationId, month);
+    }
+    for (const date of dates) {
+      await assertAttendanceMonthOpen(transaction, actor.organizationId, date);
+    }
+    const [current] = await transaction
+      .select()
+      .from(leaveRequests)
+      .where(
+        and(
+          eq(leaveRequests.id, requestId),
+          eq(leaveRequests.organizationId, actor.organizationId),
+          eq(leaveRequests.employeeId, selfAccess.approvalCase.targetEmployeeId),
+          eq(leaveRequests.status, "returned"),
+        ),
+      )
+      .limit(1);
+    if (!current) throw new LeaveRequestConflictError();
+    const preview = await previewLeaveRequest(transaction, actor, {
+      ...input,
+      employeeId: proxyEmployeeId,
+    });
+    const duplicate = await overlappingLeave(
+      transaction,
+      actor.organizationId,
+      preview.employee.id,
+      preview.included.map((day) => day.workDate),
+      requestId,
+    );
+    if (duplicate) {
+      throw new LeaveRequestValidationError(`${duplicate.workDate}には既存の休暇申請があります。`);
+    }
+    if (preview.leaveType.consumesBalance && preview.afterAvailableUnits! < 0) {
+      throw new LeaveLedgerValidationError(
+        `休暇残高が${Math.abs(preview.afterAvailableUnits!)}単位不足しています。`,
+      );
+    }
+    await transaction.delete(leaveRequestDays).where(eq(leaveRequestDays.requestId, requestId));
+    await transaction.insert(leaveRequestDays).values(
+      preview.included.map((day) => ({
+        calendarSource: day.calendarSource,
+        requestId,
+        scheduledMinutes: day.scheduledMinutes,
+        units: day.units,
+        workDate: day.workDate as WorkDate,
+      })),
+    );
+    const [request] = await transaction
+      .update(leaveRequests)
+      .set({
+        baseBalanceVersion: preview.balance.version,
+        consumesBalance: preview.leaveType.consumesBalance,
+        leaveTypeCode: preview.leaveType.code,
+        leaveTypeId: preview.leaveType.id,
+        leaveTypeName: preview.leaveType.name,
+        paid: preview.leaveType.paid,
+        reason,
+        reviewComment: null,
+        reviewedAt: null,
+        reviewerUserId: null,
+        status: "pending",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(leaveRequests.id, requestId), eq(leaveRequests.status, "returned")))
+      .returning();
+    if (!request) throw new LeaveRequestConflictError();
+    const approvalCase = await appendApprovalRevisionAndResubmit(transaction, actor, {
+      approvalCaseId,
+      expectedVersion: input.expectedCaseVersion,
+      snapshot: {
+        days: preview.included.map((day) => ({
+          calendarSource: day.calendarSource,
+          scheduledMinutes: day.scheduledMinutes,
+          units: day.units,
+          workDate: day.workDate,
+        })),
+        employeeId: request.employeeId,
+        leaveTypeCode: request.leaveTypeCode,
+        leaveTypeId: request.leaveTypeId,
+        leaveTypeName: request.leaveTypeName,
+        reason: request.reason,
+        requestId: request.id,
+        requestType: "leave",
+      },
+    });
+    return { approvalCase, request };
+  });
+}
+
 export async function cancelLeaveRequest(db: AppDatabase, actor: SessionActor, requestId: string) {
+  const selfAccess = await approvalCaseSelfAccessForDomainRequest(db, actor, {
+    leaveRequestId: requestId,
+  });
   const preflight = await db
     .select({ request: leaveRequests, workDate: leaveRequestDays.workDate })
     .from(leaveRequests)
@@ -286,13 +473,16 @@ export async function cancelLeaveRequest(db: AppDatabase, actor: SessionActor, r
       and(
         eq(leaveRequests.id, requestId),
         eq(leaveRequests.organizationId, actor.organizationId),
-        eq(leaveRequests.requestedByUserId, actor.userId),
+        eq(leaveRequests.employeeId, selfAccess.approvalCase.targetEmployeeId),
       ),
     );
   if (!preflight.length)
     throw new LeaveRequestValidationError("自分の休暇申請を確認できませんでした。");
   const months = [...new Set(preflight.map((row) => row.workDate.slice(0, 7)))].sort();
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      leaveRequestId: requestId,
+    });
     for (const month of months) await lockAttendanceMonth(transaction, actor.organizationId, month);
     const [request] = await transaction
       .select()
@@ -301,12 +491,12 @@ export async function cancelLeaveRequest(db: AppDatabase, actor: SessionActor, r
         and(
           eq(leaveRequests.id, requestId),
           eq(leaveRequests.organizationId, actor.organizationId),
-          eq(leaveRequests.requestedByUserId, actor.userId),
+          eq(leaveRequests.employeeId, selfAccess.approvalCase.targetEmployeeId),
         ),
       )
       .limit(1);
     if (!request) throw new LeaveRequestConflictError();
-    if (request.status !== "pending") {
+    if (request.status !== "pending" && request.status !== "returned") {
       throw new LeaveRequestValidationError(
         "審査済みの申請は取り消せません。管理者へ連絡してください。",
       );
@@ -320,9 +510,21 @@ export async function cancelLeaveRequest(db: AppDatabase, actor: SessionActor, r
     const [cancelled] = await transaction
       .update(leaveRequests)
       .set({ cancelledAt: new Date(), status: "cancelled", updatedAt: new Date() })
-      .where(and(eq(leaveRequests.id, request.id), eq(leaveRequests.status, "pending")))
+      .where(
+        and(
+          eq(leaveRequests.id, request.id),
+          or(eq(leaveRequests.status, "pending"), eq(leaveRequests.status, "returned")),
+        ),
+      )
       .returning();
     if (!cancelled) throw new LeaveRequestConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: request.status,
+      organizationId: actor.organizationId,
+      reference: { leaveRequestId: request.id },
+      status: "cancelled",
+    });
     await recordAudit(transaction, {
       action: "leave_request_cancelled",
       actorUserId: actor.userId,
@@ -420,8 +622,18 @@ export async function getLeaveReviewDetail(
   return { balance, days, existingLeave: existingLeave ?? null, lots, punches, request, schedules };
 }
 
-export async function approveLeaveRequest(db: AppDatabase, actor: SessionActor, requestId: string) {
-  requirePermission(actor, "leave:manage");
+export async function approveLeaveRequest(
+  db: AppDatabase,
+  actor: SessionActor,
+  requestId: string,
+  options: Readonly<{ approvalCaseVersion?: number }> = {},
+) {
+  await assertDomainApprovalReviewAccess(
+    db,
+    actor,
+    { leaveRequestId: requestId },
+    options.approvalCaseVersion,
+  );
   const preflight = await db
     .select({ workDate: leaveRequestDays.workDate })
     .from(leaveRequestDays)
@@ -432,6 +644,9 @@ export async function approveLeaveRequest(db: AppDatabase, actor: SessionActor, 
   if (!preflight.length) throw new LeaveRequestValidationError("休暇申請を確認できませんでした。");
   const months = [...new Set(preflight.map((row) => row.workDate.slice(0, 7)))].sort();
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      leaveRequestId: requestId,
+    });
     for (const month of months) await lockAttendanceMonth(transaction, actor.organizationId, month);
     await transaction.execute(
       sql`SELECT id FROM ${leaveRequests} WHERE id = ${requestId} FOR UPDATE`,
@@ -516,6 +731,15 @@ export async function approveLeaveRequest(db: AppDatabase, actor: SessionActor, 
       .where(and(eq(leaveRequests.id, request.id), eq(leaveRequests.status, "pending")))
       .returning();
     if (!approved) throw new LeaveRequestConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: "pending",
+      expectedVersion: options.approvalCaseVersion,
+      organizationId: actor.organizationId,
+      reference: { leaveRequestId: request.id },
+      reviewerUserId: actor.userId,
+      status: "approved",
+    });
     await recordAudit(transaction, {
       action: "leave_request_approved",
       actorUserId: actor.userId,
@@ -536,8 +760,14 @@ export async function rejectLeaveRequest(
   actor: SessionActor,
   requestId: string,
   comment: string,
+  options: Readonly<{ approvalCaseVersion?: number }> = {},
 ) {
-  requirePermission(actor, "leave:manage");
+  await assertDomainApprovalReviewAccess(
+    db,
+    actor,
+    { leaveRequestId: requestId },
+    options.approvalCaseVersion,
+  );
   const reviewComment = required(comment, "却下理由");
   const preflight = await db
     .select({ workDate: leaveRequestDays.workDate })
@@ -549,6 +779,9 @@ export async function rejectLeaveRequest(
   if (!preflight.length) throw new LeaveRequestValidationError("休暇申請を確認できませんでした。");
   const months = [...new Set(preflight.map((row) => row.workDate.slice(0, 7)))].sort();
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      leaveRequestId: requestId,
+    });
     for (const month of months) await lockAttendanceMonth(transaction, actor.organizationId, month);
     await transaction.execute(
       sql`SELECT id FROM ${leaveRequests} WHERE id = ${requestId} FOR UPDATE`,
@@ -585,6 +818,16 @@ export async function rejectLeaveRequest(
       .where(and(eq(leaveRequests.id, request.id), eq(leaveRequests.status, "pending")))
       .returning();
     if (!rejected) throw new LeaveRequestConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: "pending",
+      expectedVersion: options.approvalCaseVersion,
+      organizationId: actor.organizationId,
+      reference: { leaveRequestId: request.id },
+      reviewComment,
+      reviewerUserId: actor.userId,
+      status: "rejected",
+    });
     await recordAudit(transaction, {
       action: "leave_request_rejected",
       actorUserId: actor.userId,

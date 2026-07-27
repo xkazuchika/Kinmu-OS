@@ -16,7 +16,7 @@ type EditableEntry = {
   originalOccurredAt?: string;
   type: PunchType;
 };
-type CorrectionStatus = "approved" | "cancelled" | "pending" | "rejected";
+type CorrectionStatus = "approved" | "cancelled" | "pending" | "rejected" | "returned";
 type HistoryItem = {
   createdAt: Date | string;
   id: string;
@@ -86,6 +86,7 @@ const statusLabels: Record<CorrectionStatus, string> = {
   cancelled: "取消済み",
   pending: "審査待ち",
   rejected: "却下",
+  returned: "差し戻し",
 };
 
 const overtimeStatusLabels = {

@@ -271,7 +271,7 @@ describeDatabase("v0.5 overtime request and notification schema", () => {
         summary: "不正な対象です",
         title: "不正な通知",
       }),
-      "notification target must be an overtime request",
+      "notification target type is not supported",
     );
   });
 });

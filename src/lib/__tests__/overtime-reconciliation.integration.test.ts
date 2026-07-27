@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 
 import type { SessionActor } from "@/lib/authorization";
+import { createApprovalCase } from "@/lib/approval-cases";
 import {
   closeAttendanceMonth,
   getAttendanceMonthStatus,
@@ -355,8 +356,32 @@ describeDatabase("overtime reconciliation and monthly closing", () => {
         workDate: "2026-06-10",
       })
       .returning();
+    await createApprovalCase(client.db, {
+      employeeId: data.employee.id,
+      organizationId: data.organization.id,
+      reference: {
+        overtimeWorkRequestId: request.id,
+        requestType: request.kind,
+      },
+      snapshot: {
+        calendarSnapshot: {},
+        employeeId: request.employeeId,
+        plannedBreakMinutes: request.plannedBreakMinutes,
+        plannedEndAt: request.plannedEndAt.toISOString(),
+        plannedMinutes: request.plannedMinutes,
+        plannedStartAt: request.plannedStartAt.toISOString(),
+        policyId: request.policyId,
+        reason: request.reason,
+        requestId: request.id,
+        requestType: request.kind,
+        workDate: request.workDate,
+        workRuleSnapshot: {},
+      },
+      submittedByUserId: data.employeeUser.id,
+      targetDate: request.workDate,
+    });
     const results = await Promise.allSettled([
-      approveOvertimeWorkRequest(client.db, data.reviewerActor, request.id, 0),
+      approveOvertimeWorkRequest(client.db, data.reviewerActor, request.id, 0, 0),
       closeAttendanceMonth(client.db, data.reviewerActor, {
         expectedVersion: 0,
         month: data.month,

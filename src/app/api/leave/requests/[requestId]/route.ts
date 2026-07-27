@@ -7,6 +7,7 @@ import {
   getLeaveReviewDetail,
   LeaveRequestValidationError,
   rejectLeaveRequest,
+  resubmitLeaveRequest,
 } from "@/lib/leave-requests";
 
 type Context = { params: Promise<{ requestId: string }> };
@@ -30,6 +31,18 @@ export async function POST(request: Request, context: Context) {
     const { requestId } = await context.params;
     if (body.action === "cancel") {
       return Response.json({ request: await cancelLeaveRequest(database, actor, requestId) });
+    }
+    if (body.action === "resubmit") {
+      return Response.json({
+        request: await resubmitLeaveRequest(database, actor, requestId, {
+          expectedCaseVersion: Number(body.expectedCaseVersion),
+          from: String(body.from ?? ""),
+          leaveTypeId: String(body.leaveTypeId ?? ""),
+          reason: String(body.reason ?? ""),
+          to: String(body.to ?? ""),
+          unit: body.unit === "half_day" ? "half_day" : "full_day",
+        }),
+      });
     }
     if (body.action === "approve") {
       return Response.json({ request: await approveLeaveRequest(database, actor, requestId) });

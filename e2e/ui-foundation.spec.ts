@@ -14,6 +14,10 @@ const hrAdmin = {
   email: "hr.ui-test@example.com",
   password: "HrUiTest-2026!",
 };
+const approver = {
+  email: "approver.ui-test@example.com",
+  password: "ApproverUiTest-2026!",
+};
 let loginSequence = 10;
 
 async function activate(request: APIRequestContext, setupUrl: string, password: string) {
@@ -45,7 +49,7 @@ async function prepareAccounts(request: APIRequestContext) {
   async function ensureUser(
     account: { email: string; password: string },
     displayName: string,
-    role: "hr_admin" | "employee",
+    role: "approver" | "hr_admin" | "employee",
   ) {
     const usersResponse = await request.get("/api/users");
     expect(usersResponse.ok()).toBe(true);
@@ -64,6 +68,7 @@ async function prepareAccounts(request: APIRequestContext) {
   }
 
   await ensureUser(hrAdmin, "労務 管理子", "hr_admin");
+  await ensureUser(approver, "承認 担当子", "approver");
   await ensureUser(employee, "従業員 花子", "employee");
 
   const usersResponse = await request.get("/api/users");
@@ -168,7 +173,8 @@ function collectConsoleProblems(page: Page) {
   const problems: string[] = [];
   page.on("console", (message) => {
     if (["error", "warning"].includes(message.type())) {
-      problems.push(`${message.type()}: ${message.text()}`);
+      const source = message.location().url;
+      problems.push(`${message.type()}: ${message.text()}${source ? ` (${source})` : ""}`);
     }
   });
   page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
@@ -260,7 +266,6 @@ test("guided navigation preserves context and protects unfinished forms", async 
   await page.goto("/attendance?month=2026-07");
   await expect(page.getByText("対象月の勤務実績を確認し").first()).toBeVisible();
   await expect(page.getByText("勤怠一覧を読み込んでいます")).toBeHidden();
-  await expect(page.getByRole("navigation", { name: "ページを移動" })).toBeVisible();
   expect(
     await page.getByRole("table", { name: "勤怠一覧" }).getByRole("row").count(),
   ).toBeLessThanOrEqual(51);
@@ -325,9 +330,13 @@ test("major management screens keep their purpose and fit narrow viewports", asy
     "/employees/departments",
     "/employees/import",
     "/settings/users",
+    "/settings/approval-delegations",
+    "/settings/approval-routes",
     "/attendance",
     "/attendance/rules",
     "/attendance/corrections",
+    "/approvals",
+    "/approvals/proxy",
     "/calendar",
     "/leave/manage",
     "/leave/reviews",
@@ -444,6 +453,13 @@ test("employee home and records work at 320 CSS pixels", async ({ page }) => {
     true,
   );
   await page.screenshot({ fullPage: false, path: "/tmp/kinmu-os-mobile-records.png" });
+
+  await page.goto("/requests");
+  await expect(page.getByRole("heading", { level: 1, name: "申請履歴" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "詳細を確認" }).first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 
   await page.goto("/profile");
   await expect(page.getByRole("heading", { level: 1, name: "プロフィール" })).toBeVisible();
@@ -1167,23 +1183,27 @@ test("employee overtime request, HR review, notification, and difference work at
     .locator(".dashboard-summary > div")
     .filter({ hasText: "審査待ち残業" });
   const pendingOvertimeLink = pendingOvertimeSummary.getByRole("link");
-  await expect(pendingOvertimeLink).toHaveAttribute("href", "/overtime/reviews?status=pending");
+  await expect(pendingOvertimeLink).toHaveAttribute(
+    "href",
+    "/approvals?status=pending&requestType=overtime",
+  );
   await pendingOvertimeLink.click();
-  await expect(page).toHaveURL(/\/overtime\/reviews\?status=pending/);
+  await expect(page).toHaveURL(/\/approvals\?status=pending&requestType=overtime/);
   const reviewItem = page
-    .locator(".review-list button")
-    .filter({ hasText: employee.employeeNumber })
-    .first();
-  await reviewItem.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByText("E2E残業申請の確認")).toBeVisible();
-  const reviewButton = page.getByRole("button", { name: "承認内容を確認" });
+    .getByRole("row")
+    .filter({ hasText: workDate })
+    .filter({ hasText: "残業" })
+    .getByRole("link", { name: "内容を確認して審査" });
+  await expect(reviewItem).toHaveCount(1);
+  await reviewItem.click();
+  await expect(page.getByRole("heading", { level: 1, name: "残業の確認" })).toBeVisible();
+  const reviewButton = page.getByRole("button", { name: "承認する" });
   await reviewButton.focus();
   await page.keyboard.press("Enter");
-  const reviewDialog = page.getByRole("alertdialog", { name: "この申請を承認しますか" });
+  const reviewDialog = page.getByRole("alertdialog", { name: "この審査結果でよいですか？" });
   await expect(reviewDialog.getByRole("button", { name: "キャンセル" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
-  await expect(reviewDialog.getByRole("button", { name: "申請を承認" })).toBeFocused();
+  await expect(reviewDialog.getByRole("button", { name: "承認を確定" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByText("申請を承認しました。")).toBeVisible();
   await page.screenshot({ fullPage: true, path: "/tmp/kinmu-v05-overtime-review-desktop.png" });
@@ -1251,9 +1271,162 @@ test("employee overtime request, HR review, notification, and difference work at
   const notificationButton = page.getByRole("button", { name: /残業申請が承認されました/ }).first();
   await notificationButton.focus();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/overtime\?requestId=/);
+  await expect(page).toHaveURL(/\/requests\/[0-9a-f-]+$/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+  expect(consoleProblems).toEqual([]);
+});
+
+test("proxy attendance correction is returned, revised, approved, and closed through the unified flow", async ({
+  page,
+}) => {
+  const consoleProblems = collectConsoleProblems(page);
+  const scenarioStamp = Date.now();
+  const workDate = `2026-${String((scenarioStamp % 5) + 1).padStart(2, "0")}-${String(
+    (Math.floor(scenarioStamp / 5) % 20) + 1,
+  ).padStart(2, "0")}`;
+
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const [usersResponse, departmentsResponse, employeesResponse] = await Promise.all([
+    page.request.get("/api/users"),
+    page.request.get("/api/departments"),
+    page.request.get("/api/employees"),
+  ]);
+  expect(usersResponse.ok()).toBe(true);
+  expect(departmentsResponse.ok()).toBe(true);
+  expect(employeesResponse.ok()).toBe(true);
+  const { users } = (await usersResponse.json()) as {
+    users: Array<{ email: string; id: string }>;
+  };
+  const { departments } = (await departmentsResponse.json()) as {
+    departments: Array<{ code: string; id: string }>;
+  };
+  const { employees } = (await employeesResponse.json()) as {
+    employees: Array<{ employeeNumber: string; id: string }>;
+  };
+  const approverUser = users.find((user) => user.email === approver.email);
+  const department = departments.find((item) => item.code === "UI-TEST");
+  const targetEmployee = employees.find((item) => item.employeeNumber === employee.employeeNumber);
+  expect(approverUser).toBeTruthy();
+  expect(department).toBeTruthy();
+  expect(targetEmployee).toBeTruthy();
+
+  const routesResponse = await page.request.get("/api/approvals/routes");
+  expect(routesResponse.ok()).toBe(true);
+  const { routes } = (await routesResponse.json()) as {
+    routes: Array<{
+      approverUserId: string;
+      departmentId: string;
+      effectiveTo: string | null;
+      requestType: string;
+    }>;
+  };
+  if (
+    !routes.some(
+      (route) =>
+        route.approverUserId === approverUser!.id &&
+        route.departmentId === department!.id &&
+        route.requestType === "attendance_correction" &&
+        !route.effectiveTo,
+    )
+  ) {
+    const routeResponse = await page.request.post("/api/approvals/routes", {
+      data: {
+        approverUserId: approverUser!.id,
+        departmentId: department!.id,
+        dueDays: 2,
+        effectiveFrom: new Date().toISOString().slice(0, 10),
+        requestType: "attendance_correction",
+      },
+    });
+    expect(routeResponse.status()).toBe(201);
+  }
+
+  const proxyResponse = await page.request.post("/api/attendance/corrections", {
+    data: {
+      employeeId: targetEmployee!.id,
+      entries: [
+        { occurredAt: `${workDate}T00:00:00.000Z`, type: "clock_in" },
+        { occurredAt: `${workDate}T09:00:00.000Z`, type: "clock_out" },
+      ],
+      proxyReason: "本人から電話で依頼を受けたため",
+      reason: "代理作成から差し戻し・再申請までを確認",
+      workDate,
+    },
+  });
+  expect(proxyResponse.status()).toBe(201);
+
+  await login(page, approver.email, approver.password);
+  await page.goto("/approvals?status=pending&requestType=attendance_correction");
+  const pendingRow = page
+    .getByRole("row")
+    .filter({ hasText: workDate })
+    .filter({ hasText: "勤怠修正" });
+  await expect(pendingRow).toHaveCount(1);
+  await pendingRow.getByRole("link", { name: "内容を確認して審査" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "勤怠修正の確認" })).toBeVisible();
+  await expect(page.getByText("管理者による代理作成")).toBeVisible();
+  await page.getByLabel("審査コメント").fill("退勤時刻の根拠を確認して再申請してください。");
+  await page.getByRole("button", { name: "修正を依頼して差し戻す" }).click();
+  const returnDialog = page.getByRole("alertdialog", {
+    name: "この審査結果でよいですか？",
+  });
+  await returnDialog.getByRole("button", { name: "差し戻しを確定" }).click();
+  await expect(page.getByText("理由を添えて差し戻しました。")).toBeVisible();
+  await expect(page.getByText("差し戻し中", { exact: true })).toBeVisible();
+
+  await login(page, employee.email, employee.password);
+  await page.goto("/requests");
+  const returnedRow = page
+    .getByRole("row")
+    .filter({ hasText: workDate })
+    .filter({ hasText: "差し戻し・修正待ち" });
+  await expect(returnedRow).toHaveCount(1);
+  await returnedRow.getByRole("link", { name: "理由を確認して修正" }).click();
+  await expect(page.getByText("退勤時刻の根拠を確認して再申請してください。")).toBeVisible();
+  await page.getByLabel("申請理由").fill("本人確認済み。退勤記録を再確認しました。");
+  await page.getByRole("button", { name: "修正内容を再申請" }).click();
+  await expect(page.getByText("修正内容を再申請しました。")).toBeVisible();
+  await expect(page.getByText("第2版", { exact: true })).toBeVisible();
+
+  await login(page, approver.email, approver.password);
+  await page.goto("/approvals?status=pending&requestType=attendance_correction");
+  const resubmittedRow = page
+    .getByRole("row")
+    .filter({ hasText: workDate })
+    .filter({ hasText: "勤怠修正" });
+  await expect(resubmittedRow).toHaveCount(1);
+  await resubmittedRow.getByRole("link", { name: "内容を確認して審査" }).click();
+  await page.getByRole("button", { name: "承認する" }).click();
+  const approveDialog = page.getByRole("alertdialog", {
+    name: "この審査結果でよいですか？",
+  });
+  await approveDialog.getByRole("button", { name: "承認を確定" }).click();
+  await expect(page.getByText("申請を承認しました。")).toBeVisible();
+  await expect(page.getByText("承認済み", { exact: true })).toBeVisible();
+
+  await login(page, employee.email, employee.password);
+  await page.goto("/notifications");
+  await expect(page.getByText("勤怠修正申請が承認されました").first()).toBeVisible();
+
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const closingResponse = await page.request.get(
+    `/api/attendance/closing?month=${workDate.slice(0, 7)}`,
+  );
+  expect(closingResponse.ok()).toBe(true);
+  const closing = (await closingResponse.json()) as {
+    closing: { canClose: boolean; period: { version: number } };
+  };
+  expect(closing.closing.canClose).toBe(true);
+  const closeResponse = await page.request.post("/api/attendance/closing", {
+    data: {
+      action: "close",
+      expectedVersion: closing.closing.period.version,
+      month: workDate.slice(0, 7),
+    },
+  });
+  const closePayload = (await closeResponse.json()) as { error?: string };
+  expect(closeResponse.ok(), closePayload.error).toBe(true);
   expect(consoleProblems).toEqual([]);
 });

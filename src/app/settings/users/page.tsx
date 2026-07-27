@@ -21,11 +21,12 @@ type User = {
   displayName: string;
   email: string;
   id: string;
-  role: "owner" | "hr_admin" | "employee";
+  role: "owner" | "hr_admin" | "approver" | "employee";
   status: "active" | "disabled" | "pending_setup";
 };
 
 const roleLabel: Record<User["role"], string> = {
+  approver: "承認者",
   employee: "従業員",
   hr_admin: "労務管理者",
   owner: "所有者",
@@ -138,12 +139,13 @@ export default function UsersSettingsPage() {
           />
           <SelectField
             defaultValue="employee"
-            description="所有者・労務管理者は管理機能へアクセスできます。"
+            description="承認者は割り当てられた申請だけを審査できます。所有者・労務管理者は管理機能へアクセスできます。"
             id="role"
             label="役割"
             name="role"
           >
             <option value="employee">従業員</option>
+            <option value="approver">承認者</option>
             <option value="hr_admin">労務管理者</option>
             <option value="owner">所有者</option>
           </SelectField>

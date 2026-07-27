@@ -57,6 +57,17 @@ const actions = [
   "overtime_request_cancelled",
   "overtime_request_approved",
   "overtime_request_rejected",
+  "approval_route_changed",
+  "approval_delegation_changed",
+  "approval_case_assigned",
+  "approval_case_submitted",
+  "approval_case_returned",
+  "approval_case_resubmitted",
+  "approval_case_approved",
+  "approval_case_rejected",
+  "approval_case_cancelled",
+  "approval_proxy_created",
+  "approval_self_review_rejected",
   "payroll_profile_created",
   "payroll_profile_changed",
   "payroll_profile_published",
@@ -111,6 +122,34 @@ export default function AuditPage() {
           <Field id="audit-actor" label="操作者ID" name="actorUserId" />
           <Field id="audit-entity" label="対象従業員・対象ID" name="entityId" />
           <Field id="audit-employee" label="対象従業員ID" name="employeeId" />
+          <Field id="audit-department" label="申請時部署ID" name="departmentId" />
+          <SelectField id="audit-approval-type" label="承認申請種別" name="approvalRequestType">
+            <option value="">すべて</option>
+            <option value="attendance_correction">勤怠修正</option>
+            <option value="leave">休暇</option>
+            <option value="overtime">残業</option>
+            <option value="holiday_work">休日出勤</option>
+          </SelectField>
+          <SelectField id="audit-proxy" label="代理作成" name="submittedOnBehalf">
+            <option value="">すべて</option>
+            <option value="1">代理作成のみ</option>
+            <option value="0">本人作成のみ</option>
+          </SelectField>
+          <Field id="audit-original-approver" label="元担当者ID" name="originalApproverUserId" />
+          <Field id="audit-assigned-approver" label="実担当者ID" name="assignedApproverUserId" />
+          <Field id="audit-case-version" label="申請版" min="1" name="caseVersion" type="number" />
+          <SelectField id="audit-transition-status" label="遷移後状態" name="transitionStatus">
+            <option value="">すべて</option>
+            <option value="pending">審査待ち</option>
+            <option value="returned">差し戻し</option>
+            <option value="approved">承認済み</option>
+            <option value="rejected">却下</option>
+            <option value="cancelled">取消済み</option>
+          </SelectField>
+          <SelectField id="audit-approval-only" label="承認運用操作" name="approvalOnly">
+            <option value="">すべての操作</option>
+            <option value="1">承認運用のみ</option>
+          </SelectField>
           <Field id="audit-month" label="対象月" name="targetMonth" type="month" />
           <Field id="audit-payroll-profile" label="給与プロファイルID" name="profileId" />
           <Field

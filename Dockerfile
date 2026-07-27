@@ -9,9 +9,13 @@ WORKDIR /app
 FROM base AS dependencies
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 
 FROM base AS builder
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .

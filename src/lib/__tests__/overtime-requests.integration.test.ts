@@ -414,7 +414,7 @@ describeDatabase("overtime request workflow", () => {
       .from(notifications)
       .where(eq(notifications.organizationId, fixture.organization.id));
     expect(
-      noticesAfterFailedSelfReview.every((notice) => notice.kind === "overtime_request_submitted"),
+      noticesAfterFailedSelfReview.every((notice) => notice.kind === "approval_submitted"),
     ).toBe(true);
     const approved = await approveOvertimeWorkRequest(
       client.db,
@@ -457,8 +457,8 @@ describeDatabase("overtime request workflow", () => {
         ),
       );
     expect(resultNotices.map((notice) => notice.kind).sort()).toEqual([
-      "overtime_request_approved",
-      "overtime_request_rejected",
+      "approval_approved",
+      "approval_rejected",
     ]);
     const actions = await client.db
       .select({ action: auditLogs.action })
@@ -479,7 +479,11 @@ describeDatabase("overtime request workflow", () => {
     });
     const inbox = await listNotifications(client.db, fixture.reviewerActor, { limit: 1 });
     expect(inbox).toMatchObject({ unreadCount: 1 });
-    expect(inbox.items[0]).toMatchObject({ entityId: created.request.id, readAt: null });
+    expect(inbox.items[0]).toMatchObject({
+      entityType: "approval_case",
+      kind: "approval_submitted",
+      readAt: null,
+    });
     const otherOrganization = await createFixture("NOTICE-OTHER");
     await expect(
       markNotificationsRead(client.db, fixture.employeeActor, [inbox.items[0].id]),
@@ -489,7 +493,7 @@ describeDatabase("overtime request workflow", () => {
     ).rejects.toThrow();
     expect(
       await notificationTarget(client.db, fixture.reviewerActor, inbox.items[0].id),
-    ).toMatchObject({ available: true, href: expect.stringContaining("/overtime/reviews") });
+    ).toMatchObject({ available: true, href: expect.stringContaining("/approvals/") });
     const concurrentReads = await Promise.all([
       markNotificationsRead(client.db, fixture.reviewerActor, [inbox.items[0].id]),
       markNotificationsRead(client.db, fixture.reviewerActor, [inbox.items[0].id]),
@@ -499,7 +503,7 @@ describeDatabase("overtime request workflow", () => {
     await approveOvertimeWorkRequest(client.db, fixture.reviewerActor, created.request.id, 0);
     expect(
       await notificationTarget(client.db, fixture.reviewerActor, inbox.items[0].id),
-    ).toMatchObject({ available: true, href: expect.stringContaining("/overtime/reviews") });
+    ).toMatchObject({ available: true, href: expect.stringContaining("/approvals/") });
 
     await client.db
       .update(users)

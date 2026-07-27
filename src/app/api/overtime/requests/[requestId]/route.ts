@@ -5,6 +5,7 @@ import {
   cancelOvertimeWorkRequest,
   getOwnOvertimeWorkRequest,
   OvertimeRequestValidationError,
+  resubmitOvertimeWorkRequest,
 } from "@/lib/overtime-requests";
 
 type RouteContext = { params: Promise<{ requestId: string }> };
@@ -23,7 +24,7 @@ export async function GET(request: Request, context: RouteContext) {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
-    if (body.action !== "cancel")
+    if (body.action !== "cancel" && body.action !== "resubmit")
       throw new OvertimeRequestValidationError("操作が正しくありません。");
     const expectedVersion = Number(body.expectedVersion);
     if (!Number.isInteger(expectedVersion)) {
@@ -32,6 +33,20 @@ export async function PATCH(request: Request, context: RouteContext) {
     const database = getDatabase();
     const actor = await requireActor(database, request);
     const { requestId } = await context.params;
+    if (body.action === "resubmit") {
+      return Response.json({
+        request: await resubmitOvertimeWorkRequest(database, actor, requestId, {
+          endTime: String(body.endTime ?? ""),
+          expectedCaseVersion: Number(body.expectedCaseVersion),
+          expectedVersion,
+          kind: body.kind === "holiday_work" ? "holiday_work" : "overtime",
+          plannedBreakMinutes: Number(body.plannedBreakMinutes),
+          reason: String(body.reason ?? ""),
+          startTime: String(body.startTime ?? ""),
+          workDate: String(body.workDate ?? ""),
+        }),
+      });
+    }
     return Response.json({
       request: await cancelOvertimeWorkRequest(database, actor, requestId, expectedVersion),
     });

@@ -327,7 +327,7 @@ describeDatabase("leave request review and absence", () => {
     });
     await expect(
       approveLeaveRequest(client.db, employeeAdminActor, selfRequest.request.id),
-    ).rejects.toThrow("自分の休暇申請は承認できません");
+    ).rejects.toThrow("自分の申請（自分が対象または作成者）は審査できません");
 
     const punchedRequest = await createLeaveRequest(client.db, employeeActor, {
       from: "2026-07-22",

@@ -348,7 +348,7 @@ export async function listManagedAttendance(
     month: string;
     openOnly?: boolean;
     operationalStatuses?: AttendanceOperationStatus[];
-    overtimeRequestStatuses?: Array<"approved" | "cancelled" | "pending" | "rejected">;
+    overtimeRequestStatuses?: Array<"approved" | "cancelled" | "pending" | "rejected" | "returned">;
     overtimeReconciliationStatuses?: Array<
       "exceeded_request" | "no_actual" | "unapproved_actual" | "under_request" | "within_request"
     >;

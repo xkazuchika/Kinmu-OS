@@ -1,8 +1,8 @@
-import { and, count, desc, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "@/lib/db/client";
 import { projectOperationalAttendanceMonth } from "@/lib/attendance-operations";
-import { countPendingAttendanceCorrections } from "@/lib/attendance-corrections";
+import { countOpenAttendanceCorrections } from "@/lib/attendance-corrections";
 import {
   attendanceDays,
   auditLogs,
@@ -63,12 +63,15 @@ export async function managementDashboard(db: AppDatabase, organizationId: strin
       )
       .groupBy(employees.id, employees.displayName)
       .orderBy(desc(sql`sum(${dailyAttendanceSummaries.overtimeMinutes})`)),
-    countPendingAttendanceCorrections(db, organizationId),
+    countOpenAttendanceCorrections(db, organizationId),
     db
       .select({ value: count() })
       .from(leaveRequests)
       .where(
-        and(eq(leaveRequests.organizationId, organizationId), eq(leaveRequests.status, "pending")),
+        and(
+          eq(leaveRequests.organizationId, organizationId),
+          inArray(leaveRequests.status, ["pending", "returned"]),
+        ),
       ),
     db
       .select({ value: count() })
@@ -76,7 +79,7 @@ export async function managementDashboard(db: AppDatabase, organizationId: strin
       .where(
         and(
           eq(overtimeWorkRequests.organizationId, organizationId),
-          eq(overtimeWorkRequests.status, "pending"),
+          inArray(overtimeWorkRequests.status, ["pending", "returned"]),
           gte(overtimeWorkRequests.workDate, range.from),
           lt(overtimeWorkRequests.workDate, range.to),
         ),
@@ -129,16 +132,24 @@ export function searchAuditLogs(
     action?: string;
     actorUserId?: string;
     attendanceRevision?: number;
+    approvalOnly?: boolean;
+    approvalRequestType?: "attendance_correction" | "holiday_work" | "leave" | "overtime";
+    assignedApproverUserId?: string;
+    caseVersion?: number;
+    departmentId?: string;
     entityId?: string;
     employeeId?: string;
     from?: Date;
     organizationId: string;
     overtimeRequestKind?: "holiday_work" | "overtime";
+    originalApproverUserId?: string;
     payrollOnly?: boolean;
     profileId?: string;
     runId?: string;
     targetMonth?: string;
     to?: Date;
+    submittedOnBehalf?: boolean;
+    transitionStatus?: string;
     validationResult?: "failed" | "passed";
   },
 ) {
@@ -146,8 +157,35 @@ export function searchAuditLogs(
   if (input.actorUserId) conditions.push(eq(auditLogs.actorUserId, input.actorUserId));
   if (input.entityId) conditions.push(eq(auditLogs.entityId, input.entityId));
   if (input.employeeId) {
-    conditions.push(sql`${auditLogs.metadata} ->> 'employeeId' = ${input.employeeId}`);
+    conditions.push(
+      sql`coalesce(${auditLogs.metadata} ->> 'targetEmployeeId', ${auditLogs.metadata} ->> 'employeeId') = ${input.employeeId}`,
+    );
   }
+  if (input.approvalOnly) conditions.push(sql`${auditLogs.action}::text LIKE 'approval_%'`);
+  if (input.approvalRequestType)
+    conditions.push(sql`${auditLogs.metadata} ->> 'requestType' = ${input.approvalRequestType}`);
+  if (input.departmentId)
+    conditions.push(sql`${auditLogs.metadata} ->> 'submittedDepartmentId' = ${input.departmentId}`);
+  if (input.caseVersion)
+    conditions.push(
+      sql`coalesce(${auditLogs.metadata} ->> 'currentRevision', ${auditLogs.metadata} ->> 'version') = ${String(input.caseVersion)}`,
+    );
+  if (input.submittedOnBehalf !== undefined)
+    conditions.push(
+      sql`${auditLogs.metadata} ->> 'submittedOnBehalf' = ${String(input.submittedOnBehalf)}`,
+    );
+  if (input.originalApproverUserId)
+    conditions.push(
+      sql`${auditLogs.metadata} ->> 'originalApproverUserId' = ${input.originalApproverUserId}`,
+    );
+  if (input.assignedApproverUserId)
+    conditions.push(
+      sql`coalesce(${auditLogs.metadata} ->> 'assignedApproverUserId', ${auditLogs.metadata} ->> 'toApproverUserId') = ${input.assignedApproverUserId}`,
+    );
+  if (input.transitionStatus)
+    conditions.push(
+      sql`coalesce(${auditLogs.metadata} ->> 'toStatus', ${auditLogs.metadata} ->> 'status') = ${input.transitionStatus}`,
+    );
   if (input.overtimeRequestKind) {
     conditions.push(sql`${auditLogs.metadata} ->> 'kind' = ${input.overtimeRequestKind}`);
   }

@@ -28,6 +28,7 @@ import type { SessionActor } from "@/lib/authorization";
 import { createSession, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { closeDatabase, createDatabaseClient } from "@/lib/db/client";
 import {
+  approvalCases,
   attendanceCorrectionRequests,
   attendanceDays,
   attendanceEvents,
@@ -37,6 +38,7 @@ import {
   employeeDepartments,
   employees,
   organizations,
+  notifications,
   users,
   workRules,
 } from "@/lib/db/schema";
@@ -241,7 +243,9 @@ describeDatabase("attendance correction workflow", () => {
       .from(auditLogs)
       .orderBy(asc(auditLogs.occurredAt));
     expect(actions.map((entry) => entry.action)).toEqual([
+      "approval_case_submitted",
       "attendance_correction_requested",
+      "approval_case_cancelled",
       "attendance_correction_cancelled",
     ]);
   });
@@ -434,7 +438,22 @@ describeDatabase("attendance correction workflow", () => {
         .from(attendanceCorrectionRequests)
         .where(eq(attendanceCorrectionRequests.id, created.request.id));
       const effective = await effectiveAttendanceEvents(client.db, data.day.id);
+      const [approvalCase] = await client.db
+        .select()
+        .from(approvalCases)
+        .where(eq(approvalCases.attendanceCorrectionRequestId, created.request.id));
+      const resultNotifications = await client.db
+        .select({ kind: notifications.kind })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.entityId, approvalCase.id),
+            eq(notifications.kind, "approval_approved"),
+          ),
+        );
       expect(request.status).toBe("pending");
+      expect(approvalCase).toMatchObject({ status: "pending", version: 0 });
+      expect(resultNotifications).toEqual([]);
       expect(effective.map((event) => event.id)).toEqual(data.events.map((event) => event.id));
     } finally {
       await client.db.execute(

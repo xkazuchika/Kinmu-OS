@@ -21,7 +21,7 @@ import type {
   PayrollValidationSummary,
 } from "@/lib/payroll-export-types";
 
-export const userRole = pgEnum("user_role", ["owner", "hr_admin", "employee"]);
+export const userRole = pgEnum("user_role", ["owner", "hr_admin", "approver", "employee"]);
 export const userStatus = pgEnum("user_status", ["pending_setup", "active", "disabled"]);
 export const employeeStatus = pgEnum("employee_status", [
   "scheduled",
@@ -44,6 +44,7 @@ export const attendanceEventType = pgEnum("attendance_event_type", [
 export const attendanceDayStatus = pgEnum("attendance_day_status", ["open", "complete"]);
 export const attendanceCorrectionStatus = pgEnum("attendance_correction_status", [
   "pending",
+  "returned",
   "approved",
   "rejected",
   "cancelled",
@@ -57,6 +58,7 @@ export const workCalendarStatus = pgEnum("work_calendar_status", ["draft", "acti
 export const workCalendarDayKind = pgEnum("work_calendar_day_kind", ["workday", "non_workday"]);
 export const leaveRequestStatus = pgEnum("leave_request_status", [
   "pending",
+  "returned",
   "approved",
   "rejected",
   "cancelled",
@@ -86,6 +88,20 @@ export const overtimePolicyStatus = pgEnum("overtime_policy_status", [
 export const overtimeRequestKind = pgEnum("overtime_request_kind", ["overtime", "holiday_work"]);
 export const overtimeRequestStatus = pgEnum("overtime_request_status", [
   "pending",
+  "returned",
+  "approved",
+  "rejected",
+  "cancelled",
+]);
+export const approvalRequestType = pgEnum("approval_request_type", [
+  "attendance_correction",
+  "leave",
+  "overtime",
+  "holiday_work",
+]);
+export const approvalCaseStatus = pgEnum("approval_case_status", [
+  "pending",
+  "returned",
   "approved",
   "rejected",
   "cancelled",
@@ -102,6 +118,14 @@ export const notificationKind = pgEnum("notification_kind", [
   "overtime_request_cancelled",
   "overtime_request_approved",
   "overtime_request_rejected",
+  "approval_submitted",
+  "approval_resubmitted",
+  "approval_returned",
+  "approval_approved",
+  "approval_rejected",
+  "approval_cancelled",
+  "approval_assigned",
+  "approval_unassigned",
 ]);
 export const payrollProfileStatus = pgEnum("payroll_profile_status", [
   "draft",
@@ -150,6 +174,17 @@ export const auditAction = pgEnum("audit_action", [
   "overtime_request_cancelled",
   "overtime_request_approved",
   "overtime_request_rejected",
+  "approval_route_changed",
+  "approval_delegation_changed",
+  "approval_case_assigned",
+  "approval_case_submitted",
+  "approval_case_returned",
+  "approval_case_resubmitted",
+  "approval_case_approved",
+  "approval_case_rejected",
+  "approval_case_cancelled",
+  "approval_proxy_created",
+  "approval_self_review_rejected",
   "payroll_profile_created",
   "payroll_profile_changed",
   "payroll_profile_published",
@@ -530,7 +565,7 @@ export const leaveRequests = pgTable(
     check("leave_requests_base_balance_version_nonnegative", sql`${table.baseBalanceVersion} >= 0`),
     check(
       "leave_requests_status_details_valid",
-      sql`(${table.status} = 'pending' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'approved' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'rejected' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'cancelled' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NOT NULL)`,
+      sql`(${table.status} = 'pending' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'returned' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'approved' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'rejected' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'cancelled' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NOT NULL)`,
     ),
     index("leave_requests_org_status_created_idx").on(
       table.organizationId,
@@ -789,7 +824,7 @@ export const attendanceCorrectionRequests = pgTable(
     ),
     uniqueIndex("attendance_correction_requests_pending_unique")
       .on(table.employeeId, table.workDate)
-      .where(sql`${table.status} = 'pending'`),
+      .where(sql`${table.status} NOT IN ('approved', 'rejected', 'cancelled')`),
     index("attendance_corrections_org_status_created_idx").on(
       table.organizationId,
       table.status,
@@ -999,7 +1034,7 @@ export const overtimeWorkRequests = pgTable(
     check("overtime_work_requests_version_nonnegative", sql`${table.version} >= 0`),
     check(
       "overtime_work_requests_status_details_valid",
-      sql`(${table.status} = 'pending' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'approved' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'rejected' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status} = 'cancelled' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NOT NULL)`,
+      sql`(${table.status}::text = 'pending' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'returned' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'approved' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'rejected' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'cancelled' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NOT NULL)`,
     ),
     index("overtime_work_requests_org_status_created_idx").on(
       table.organizationId,
@@ -1011,6 +1046,287 @@ export const overtimeWorkRequests = pgTable(
       table.organizationId,
       table.workDate,
       table.kind,
+    ),
+  ],
+);
+
+export const approvalRouteAssignments = pgTable(
+  "approval_route_assignments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    departmentId: uuid("department_id")
+      .notNull()
+      .references(() => departments.id, { onDelete: "restrict" }),
+    requestType: approvalRequestType("request_type").notNull(),
+    approverUserId: uuid("approver_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    effectiveFrom: date("effective_from").notNull(),
+    effectiveTo: date("effective_to"),
+    dueDays: integer("due_days"),
+    version: integer("version").notNull().default(0),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "approval_route_assignments_effective_range_valid",
+      sql`${table.effectiveTo} IS NULL OR ${table.effectiveTo} >= ${table.effectiveFrom}`,
+    ),
+    check(
+      "approval_route_assignments_due_days_valid",
+      sql`${table.dueDays} IS NULL OR (${table.dueDays} >= 1 AND ${table.dueDays} <= 365)`,
+    ),
+    check("approval_route_assignments_version_nonnegative", sql`${table.version} >= 0`),
+    uniqueIndex("approval_route_assignments_org_dept_type_from_unique").on(
+      table.organizationId,
+      table.departmentId,
+      table.requestType,
+      table.effectiveFrom,
+    ),
+    index("approval_route_assignments_resolution_idx").on(
+      table.organizationId,
+      table.departmentId,
+      table.requestType,
+      table.effectiveFrom,
+      table.effectiveTo,
+    ),
+    index("approval_route_assignments_approver_idx").on(
+      table.organizationId,
+      table.approverUserId,
+      table.effectiveFrom,
+    ),
+  ],
+);
+
+export const approvalDelegations = pgTable(
+  "approval_delegations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    departmentId: uuid("department_id")
+      .notNull()
+      .references(() => departments.id, { onDelete: "restrict" }),
+    requestType: approvalRequestType("request_type").notNull(),
+    originalApproverUserId: uuid("original_approver_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    delegateApproverUserId: uuid("delegate_approver_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    reason: text("reason").notNull(),
+    version: integer("version").notNull().default(0),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("approval_delegations_time_range_valid", sql`${table.endsAt} > ${table.startsAt}`),
+    check("approval_delegations_reason_not_blank", sql`length(trim(${table.reason})) > 0`),
+    check(
+      "approval_delegations_distinct_approvers",
+      sql`${table.originalApproverUserId} <> ${table.delegateApproverUserId}`,
+    ),
+    check("approval_delegations_version_nonnegative", sql`${table.version} >= 0`),
+    index("approval_delegations_resolution_idx").on(
+      table.organizationId,
+      table.departmentId,
+      table.requestType,
+      table.originalApproverUserId,
+      table.startsAt,
+      table.endsAt,
+    ),
+    index("approval_delegations_delegate_idx").on(
+      table.organizationId,
+      table.delegateApproverUserId,
+      table.endsAt,
+    ),
+  ],
+);
+
+export const approvalCases = pgTable(
+  "approval_cases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    requestType: approvalRequestType("request_type").notNull(),
+    targetEmployeeId: uuid("target_employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "restrict" }),
+    submittedDepartmentId: uuid("submitted_department_id").references(() => departments.id, {
+      onDelete: "restrict",
+    }),
+    submittedByUserId: uuid("submitted_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    submittedOnBehalf: boolean("submitted_on_behalf").notNull().default(false),
+    proxyReason: text("proxy_reason"),
+    attendanceCorrectionRequestId: uuid("attendance_correction_request_id").references(
+      () => attendanceCorrectionRequests.id,
+      { onDelete: "restrict" },
+    ),
+    leaveRequestId: uuid("leave_request_id").references(() => leaveRequests.id, {
+      onDelete: "restrict",
+    }),
+    overtimeWorkRequestId: uuid("overtime_work_request_id").references(
+      () => overtimeWorkRequests.id,
+      { onDelete: "restrict" },
+    ),
+    routeAssignmentId: uuid("route_assignment_id").references(() => approvalRouteAssignments.id, {
+      onDelete: "restrict",
+    }),
+    originalApproverUserId: uuid("original_approver_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    assignedApproverUserId: uuid("assigned_approver_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    routeReason: text("route_reason").notNull(),
+    targetDate: date("target_date").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    status: approvalCaseStatus("status").notNull().default("pending"),
+    currentRevision: integer("current_revision").notNull().default(1),
+    version: integer("version").notNull().default(0),
+    reviewerUserId: uuid("reviewer_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    reviewComment: text("review_comment"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "approval_cases_single_domain_request",
+      sql`(CASE WHEN ${table.attendanceCorrectionRequestId} IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN ${table.leaveRequestId} IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN ${table.overtimeWorkRequestId} IS NOT NULL THEN 1 ELSE 0 END) = 1`,
+    ),
+    check(
+      "approval_cases_request_type_matches_reference",
+      sql`(${table.requestType} = 'attendance_correction' AND ${table.attendanceCorrectionRequestId} IS NOT NULL AND ${table.leaveRequestId} IS NULL AND ${table.overtimeWorkRequestId} IS NULL) OR (${table.requestType} = 'leave' AND ${table.attendanceCorrectionRequestId} IS NULL AND ${table.leaveRequestId} IS NOT NULL AND ${table.overtimeWorkRequestId} IS NULL) OR (${table.requestType} IN ('overtime', 'holiday_work') AND ${table.attendanceCorrectionRequestId} IS NULL AND ${table.leaveRequestId} IS NULL AND ${table.overtimeWorkRequestId} IS NOT NULL)`,
+    ),
+    check(
+      "approval_cases_proxy_reason_valid",
+      sql`(${table.submittedOnBehalf} = false AND ${table.proxyReason} IS NULL) OR (${table.submittedOnBehalf} = true AND length(trim(${table.proxyReason})) > 0)`,
+    ),
+    check(
+      "approval_cases_route_reason_valid",
+      sql`${table.routeReason} IN ('department_route', 'delegated', 'legacy_admin_pool', 'manual_reassignment')`,
+    ),
+    check("approval_cases_current_revision_positive", sql`${table.currentRevision} >= 1`),
+    check("approval_cases_version_nonnegative", sql`${table.version} >= 0`),
+    check(
+      "approval_cases_status_details_valid",
+      sql`(${table.status}::text = 'pending' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'returned' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'approved' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'rejected' AND ${table.reviewerUserId} IS NOT NULL AND ${table.reviewedAt} IS NOT NULL AND length(trim(${table.reviewComment})) > 0 AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'cancelled' AND ${table.reviewerUserId} IS NULL AND ${table.reviewedAt} IS NULL AND ${table.cancelledAt} IS NOT NULL)`,
+    ),
+    uniqueIndex("approval_cases_attendance_correction_unique").on(
+      table.attendanceCorrectionRequestId,
+    ),
+    uniqueIndex("approval_cases_leave_request_unique").on(table.leaveRequestId),
+    uniqueIndex("approval_cases_overtime_request_unique").on(table.overtimeWorkRequestId),
+    index("approval_cases_inbox_idx").on(
+      table.organizationId,
+      table.assignedApproverUserId,
+      table.status,
+      table.dueAt,
+      table.createdAt,
+    ),
+    index("approval_cases_org_type_target_idx").on(
+      table.organizationId,
+      table.requestType,
+      table.targetDate,
+    ),
+    index("approval_cases_org_department_status_idx").on(
+      table.organizationId,
+      table.submittedDepartmentId,
+      table.status,
+    ),
+    index("approval_cases_target_employee_idx").on(
+      table.organizationId,
+      table.targetEmployeeId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const approvalCaseRevisions = pgTable(
+  "approval_case_revisions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    approvalCaseId: uuid("approval_case_id")
+      .notNull()
+      .references(() => approvalCases.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull(),
+    revisedByUserId: uuid("revised_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+    revisionReason: text("revision_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("approval_case_revisions_revision_positive", sql`${table.revision} >= 1`),
+    check(
+      "approval_case_revisions_snapshot_size",
+      sql`octet_length(${table.snapshot}::text) <= 1048576`,
+    ),
+    uniqueIndex("approval_case_revisions_case_revision_unique").on(
+      table.approvalCaseId,
+      table.revision,
+    ),
+    index("approval_case_revisions_org_created_idx").on(table.organizationId, table.createdAt),
+  ],
+);
+
+export const approvalAssignmentHistory = pgTable(
+  "approval_assignment_history",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    approvalCaseId: uuid("approval_case_id")
+      .notNull()
+      .references(() => approvalCases.id, { onDelete: "cascade" }),
+    originalApproverUserId: uuid("original_approver_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    fromApproverUserId: uuid("from_approver_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    toApproverUserId: uuid("to_approver_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    reason: text("reason").notNull(),
+    changedByUserId: uuid("changed_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("approval_assignment_history_reason_not_blank", sql`length(trim(${table.reason})) > 0`),
+    index("approval_assignment_history_case_created_idx").on(table.approvalCaseId, table.createdAt),
+    index("approval_assignment_history_org_assignee_idx").on(
+      table.organizationId,
+      table.toApproverUserId,
+      table.createdAt,
     ),
   ],
 );
@@ -1030,6 +1346,7 @@ export const notifications = pgTable(
     summary: text("summary").notNull(),
     entityType: text("entity_type").notNull(),
     entityId: uuid("entity_id").notNull(),
+    eventKey: text("event_key"),
     readAt: timestamp("read_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1044,6 +1361,7 @@ export const notifications = pgTable(
       table.createdAt,
     ),
     index("notifications_entity_idx").on(table.organizationId, table.entityType, table.entityId),
+    uniqueIndex("notifications_event_key_unique").on(table.eventKey),
   ],
 );
 

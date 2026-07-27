@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { and, count, eq, isNotNull, ne } from "drizzle-orm";
+import { and, count, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import Link from "next/link";
 
 import { AppShell } from "@/components/app-shell";
@@ -14,6 +14,7 @@ import type { AppDatabase } from "@/lib/db/client";
 import { getDatabase } from "@/lib/db/client";
 import {
   attendanceCorrectionRequests,
+  approvalCases,
   employees,
   leaveRequests,
   leaveTypes,
@@ -35,10 +36,12 @@ import {
 export const dynamic = "force-dynamic";
 
 function EmployeeHome({
+  approvalCount = 0,
   attention,
   attendance,
   dateLabel,
 }: {
+  approvalCount?: number;
   attention: { corrections: number; leave: number; overtime: number };
   attendance: { actions: PunchType[]; stateLabel: string; workDate: string };
   dateLabel: string;
@@ -60,22 +63,30 @@ function EmployeeHome({
       <section className="home-section">
         <h2>申請と確認</h2>
         <ul className="employee-attention-list">
+          {approvalCount > 0 ? (
+            <li>
+              <Link href="/approvals">
+                <span>自分の承認担当</span>
+                <strong>{approvalCount}件が審査待ち</strong>
+              </Link>
+            </li>
+          ) : null}
           <li>
-            <Link href="/attendance/me">
+            <Link href="/requests">
               <span>勤怠修正</span>
-              <strong>{attention.corrections}件が審査待ち</strong>
+              <strong>{attention.corrections}件が対応中</strong>
             </Link>
           </li>
           <li>
             <Link href="/leave">
               <span>休暇</span>
-              <strong>{attention.leave}件が審査待ち</strong>
+              <strong>{attention.leave}件が対応中</strong>
             </Link>
           </li>
           <li>
             <Link href="/overtime">
               <span>残業・休日出勤</span>
-              <strong>{attention.overtime}件が審査待ち</strong>
+              <strong>{attention.overtime}件が対応中</strong>
             </Link>
           </li>
         </ul>
@@ -148,7 +159,7 @@ function ManagementHome({
         <div>
           <dt>未処理の勤怠申請</dt>
           <dd>
-            <Link href="/attendance/corrections?status=pending">
+            <Link href="/approvals?status=pending&requestType=attendance_correction">
               {summary.pendingCorrections}件
             </Link>
           </dd>
@@ -162,13 +173,17 @@ function ManagementHome({
         <div>
           <dt>審査待ち休暇</dt>
           <dd>
-            <Link href="/leave/reviews?status=pending">{summary.pendingLeaveRequests}件</Link>
+            <Link href="/approvals?status=pending&requestType=leave">
+              {summary.pendingLeaveRequests}件
+            </Link>
           </dd>
         </div>
         <div>
           <dt>審査待ち残業</dt>
           <dd>
-            <Link href="/overtime/reviews?status=pending">{summary.pendingOvertimeRequests}件</Link>
+            <Link href="/approvals?status=pending&requestType=overtime">
+              {summary.pendingOvertimeRequests}件
+            </Link>
           </dd>
         </div>
         <div>
@@ -475,7 +490,7 @@ export default async function HomePage() {
     />
   );
 
-  if (actor.role === "employee") {
+  if (actor.role === "employee" || actor.role === "approver") {
     const [[organization], [employee]] = await Promise.all([
       database
         .select({ timezone: organizations.timezone })
@@ -513,14 +528,17 @@ export default async function HomePage() {
             .where(
               and(
                 eq(attendanceCorrectionRequests.employeeId, employee.id),
-                eq(attendanceCorrectionRequests.status, "pending"),
+                inArray(attendanceCorrectionRequests.status, ["pending", "returned"]),
               ),
             ),
           database
             .select({ value: count() })
             .from(leaveRequests)
             .where(
-              and(eq(leaveRequests.employeeId, employee.id), eq(leaveRequests.status, "pending")),
+              and(
+                eq(leaveRequests.employeeId, employee.id),
+                inArray(leaveRequests.status, ["pending", "returned"]),
+              ),
             ),
           database
             .select({ value: count() })
@@ -528,13 +546,27 @@ export default async function HomePage() {
             .where(
               and(
                 eq(overtimeWorkRequests.employeeId, employee.id),
-                eq(overtimeWorkRequests.status, "pending"),
+                inArray(overtimeWorkRequests.status, ["pending", "returned"]),
               ),
             ),
         ])
       : [[{ value: 0 }], [{ value: 0 }], [{ value: 0 }]];
+    const [assigned] =
+      actor.role === "approver"
+        ? await database
+            .select({ value: count() })
+            .from(approvalCases)
+            .where(
+              and(
+                eq(approvalCases.organizationId, actor.organizationId),
+                eq(approvalCases.assignedApproverUserId, actor.userId),
+                eq(approvalCases.status, "pending"),
+              ),
+            )
+        : [{ value: 0 }];
     employeeHome = (
       <EmployeeHome
+        approvalCount={assigned?.value ?? 0}
         attention={{
           corrections: attention[0][0]?.value ?? 0,
           leave: attention[1][0]?.value ?? 0,
@@ -548,7 +580,7 @@ export default async function HomePage() {
 
   const targetMonth = new Date().toISOString().slice(0, 7);
   const dashboardPromise =
-    actor.role === "employee"
+    actor.role === "employee" || actor.role === "approver"
       ? undefined
       : managementDashboard(database, actor.organizationId, targetMonth);
   const [dashboard, progress] = dashboardPromise
@@ -559,7 +591,7 @@ export default async function HomePage() {
     : [undefined, undefined];
   return (
     <AppShell actor={{ displayName: actor.displayName, role: actor.role }}>
-      {actor.role === "employee" ? (
+      {actor.role === "employee" || actor.role === "approver" ? (
         employeeHome
       ) : (
         <ManagementHome

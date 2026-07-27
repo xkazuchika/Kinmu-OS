@@ -1,5 +1,6 @@
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 
+import { verifyApprovalMigration } from "@/lib/db/approval-migration";
 import { createDatabaseClient } from "@/lib/db/client";
 import { loadDatabaseUrl } from "@/lib/env";
 
@@ -8,6 +9,7 @@ async function runMigrations() {
 
   try {
     await migrate(client.db, { migrationsFolder: "drizzle" });
+    await verifyApprovalMigration(client.db);
   } finally {
     await client.close();
   }

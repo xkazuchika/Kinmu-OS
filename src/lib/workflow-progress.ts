@@ -123,7 +123,7 @@ export function monthlyWorkflowProgress(facts: MonthlyFacts) {
       status: facts.openDays > 0 ? "blocked" : "completed",
     },
     {
-      href: "/attendance/corrections?status=pending",
+      href: "/approvals?status=pending",
       id: "reviews",
       label: "申請を審査",
       reason: pendingReviews > 0 ? `審査待ちが${pendingReviews}件あります。` : undefined,

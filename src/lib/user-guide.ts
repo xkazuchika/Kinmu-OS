@@ -14,7 +14,7 @@ export type GuideEntry = Readonly<{
   title: string;
 }>;
 
-export const GUIDE_VERSION = "0.7.0";
+export const GUIDE_VERSION = "0.8.0";
 export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
@@ -22,7 +22,7 @@ export const guideCatalog = [
     slug: "overview",
     title: "機能一覧と役割",
     description: "Kinmu-OSでできること、役割ごとの権限、現行版の制限を確認します。",
-    roles: ["owner", "hr_admin", "employee"],
+    roles: ["owner", "hr_admin", "approver", "employee"],
     order: 10,
     file: "overview.md",
   },
@@ -54,7 +54,7 @@ export const guideCatalog = [
     slug: "leave-requests",
     title: "休暇申請・審査・欠勤確定",
     description: "全日・半日の申請と取消、審査、競合、欠勤確定を確認します。",
-    roles: ["owner", "hr_admin", "employee"],
+    roles: ["owner", "hr_admin", "approver", "employee"],
     order: 35,
     file: "leave-requests.md",
   },
@@ -62,7 +62,7 @@ export const guideCatalog = [
     slug: "employee-attendance",
     title: "打刻・勤務実績・プロフィール",
     description: "毎日の出退勤と休憩を記録し、自分の勤務実績を確認します。",
-    roles: ["employee"],
+    roles: ["approver", "employee"],
     order: 30,
     file: "employee-attendance.md",
   },
@@ -70,7 +70,7 @@ export const guideCatalog = [
     slug: "overtime-requests",
     title: "残業・休日出勤申請",
     description: "勤務予定を確認して申請し、取消、審査結果、実績差異を確認します。",
-    roles: ["owner", "hr_admin", "employee"],
+    roles: ["owner", "hr_admin", "approver", "employee"],
     order: 37,
     file: "overtime-requests.md",
   },
@@ -86,7 +86,7 @@ export const guideCatalog = [
     slug: "notifications",
     title: "アプリ内通知",
     description: "申請イベントの通知、未読・既読、権限変更後の安全な導線を確認します。",
-    roles: ["owner", "hr_admin", "employee"],
+    roles: ["owner", "hr_admin", "approver", "employee"],
     order: 39,
     file: "notifications.md",
   },
@@ -94,7 +94,7 @@ export const guideCatalog = [
     slug: "attendance-corrections",
     title: "勤怠修正の申請と審査",
     description: "打刻の追加・変更・削除を申請し、差分を確認して審査します。",
-    roles: ["owner", "hr_admin", "employee"],
+    roles: ["owner", "hr_admin", "approver", "employee"],
     order: 40,
     file: "attendance-corrections.md",
   },
@@ -126,13 +126,13 @@ export const guideCatalog = [
     slug: "troubleshooting",
     title: "トラブル対処",
     description: "ログイン、権限、打刻、申請、CSV、セルフホスト環境を切り分けます。",
-    roles: ["owner", "hr_admin", "employee"],
+    roles: ["owner", "hr_admin", "approver", "employee"],
     order: 70,
     file: "troubleshooting.md",
   },
 ] as const satisfies readonly GuideEntry[];
 
-const validRoles = new Set<GuideRole>(["owner", "hr_admin", "employee"]);
+const validRoles = new Set<GuideRole>(["owner", "hr_admin", "approver", "employee"]);
 
 export class GuideConfigurationError extends Error {
   constructor(message: string) {
@@ -168,6 +168,15 @@ export function validateGuideCatalog(catalog: readonly GuideEntry[] = guideCatal
 export function guidesForRole(role: GuideRole) {
   validateGuideCatalog();
   const preferred: Readonly<Record<GuideRole, readonly string[]>> = {
+    approver: [
+      "leave-requests",
+      "overtime-management",
+      "notifications",
+      "attendance-corrections",
+      "employee-attendance",
+      "overview",
+      "troubleshooting",
+    ],
     employee: [
       "overtime-requests",
       "notifications",
@@ -346,5 +355,5 @@ export function parseGuideMarkdown(markdown: string): GuideBlock[] {
 }
 
 export function roleLabel(role: GuideRole) {
-  return { owner: "所有者", hr_admin: "労務管理者", employee: "従業員" }[role];
+  return { owner: "所有者", hr_admin: "労務管理者", approver: "承認者", employee: "従業員" }[role];
 }

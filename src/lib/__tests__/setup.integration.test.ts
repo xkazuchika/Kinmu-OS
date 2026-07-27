@@ -4,7 +4,13 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 
 import { createDatabaseClient } from "@/lib/db/client";
-import { initialSetupLinks, organizations, users, workCalendarPatterns } from "@/lib/db/schema";
+import {
+  initialSetupLinks,
+  organizations,
+  payrollExportProfiles,
+  users,
+  workCalendarPatterns,
+} from "@/lib/db/schema";
 import { activateSetupLink, sessionForToken } from "@/lib/auth";
 import { InitialSetupError, initializeOrganization } from "@/lib/setup";
 import { createUserWithSetupLink, setUserEnabled } from "@/lib/users";
@@ -36,6 +42,7 @@ describeDatabase("initializeOrganization", () => {
     const [owner] = await client.db.select().from(users);
     const [setupLink] = await client.db.select().from(initialSetupLinks);
     const [calendarDraft] = await client.db.select().from(workCalendarPatterns);
+    const [payrollDraft] = await client.db.select().from(payrollExportProfiles);
 
     expect(organization).toMatchObject({
       name: "勤怠株式会社",
@@ -55,6 +62,17 @@ describeDatabase("initializeOrganization", () => {
       saturdayWorkday: false,
       status: "draft",
       sundayWorkday: false,
+    });
+    expect(payrollDraft).toMatchObject({
+      createdByUserId: owner.id,
+      name: "汎用給与連携",
+      organizationId: organization.id,
+      status: "draft",
+      updatedByUserId: owner.id,
+    });
+    expect(payrollDraft.draftConfig).toMatchObject({
+      encoding: "utf8_bom",
+      schemaVersion: 1,
     });
   });
 

@@ -1,6 +1,14 @@
-import { and, asc, count, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 
 import { recordAudit } from "@/lib/audit";
+import {
+  appendApprovalRevisionAndResubmit,
+  approvalCaseSelfAccessForDomainRequest,
+  assertDomainApprovalReviewAccess,
+  createApprovalCase,
+  lockApprovalCaseForDomain,
+  syncApprovalCaseStatus,
+} from "@/lib/approval-cases";
 import {
   effectiveAttendanceEvents,
   recomputeAttendanceDay,
@@ -119,6 +127,29 @@ async function employeeContextForActor(db: AppDatabase, actor: SessionActor, wor
   return context;
 }
 
+async function employeeContextForTarget(
+  db: AppDatabase,
+  actor: SessionActor,
+  employeeId: string,
+  workDate: WorkDate,
+) {
+  requirePermission(actor, "approvals:manage");
+  const [context] = await db
+    .select({
+      employeeId: employees.id,
+      leftOn: employees.leftOn,
+      status: employees.status,
+      timezone: organizations.timezone,
+    })
+    .from(employees)
+    .innerJoin(organizations, eq(organizations.id, employees.organizationId))
+    .where(and(eq(employees.id, employeeId), eq(employees.organizationId, actor.organizationId)))
+    .limit(1);
+  if (!context) throw new AuthorizationError();
+  assertEmployeeCanPunch(context, workDate);
+  return context;
+}
+
 function eventSignature(events: ReadonlyArray<{ occurredAt: Date; type: PunchType }>) {
   return events.map((event) => `${event.type}:${event.occurredAt.toISOString()}`).join("|");
 }
@@ -128,17 +159,25 @@ export async function createAttendanceCorrection(
   actor: SessionActor,
   input: Readonly<{
     entries: ReadonlyArray<CorrectionEntryInput>;
+    employeeId?: string;
+    proxyReason?: string;
     reason: string;
     workDate: string;
   }>,
 ) {
-  requirePermission(actor, "self:write");
+  if (input.employeeId) {
+    requirePermission(actor, "approvals:manage");
+  } else {
+    requirePermission(actor, "self:write");
+  }
   const workDate = validateWorkDate(input.workDate);
   const reason = input.reason.trim();
   if (!reason || reason.length > 1000) {
     throw new AttendanceCorrectionValidationError("修正理由を1,000文字以内で入力してください。");
   }
-  const context = await employeeContextForActor(db, actor, workDate);
+  const context = input.employeeId
+    ? await employeeContextForTarget(db, actor, input.employeeId, workDate)
+    : await employeeContextForActor(db, actor, workDate);
   const requestedEntries = parseRequestedEntries(input.entries, workDate, context.timezone);
 
   return db.transaction(async (transaction) => {
@@ -220,6 +259,43 @@ export async function createAttendanceCorrection(
         })),
       );
     }
+    await createApprovalCase(transaction, {
+      employeeId: context.employeeId,
+      organizationId: actor.organizationId,
+      reference: {
+        attendanceCorrectionRequestId: request.id,
+        requestType: "attendance_correction",
+      },
+      snapshot: {
+        attendanceDayId: request.attendanceDayId,
+        baseRevision: request.baseRevision,
+        employeeId: request.employeeId,
+        entries: [
+          ...originalEvents.map((event, position) => ({
+            kind: "original" as const,
+            occurredAt: event.occurredAt.toISOString(),
+            originalEventId: event.id,
+            position,
+            type: event.type,
+          })),
+          ...requestedEntries.map((entry, position) => ({
+            kind: "requested" as const,
+            occurredAt: entry.occurredAt.toISOString(),
+            originalEventId: entry.originalEventId,
+            position,
+            type: entry.type,
+          })),
+        ],
+        reason: request.reason,
+        requestId: request.id,
+        requestType: "attendance_correction",
+        workDate: request.workDate,
+      },
+      proxyReason: input.employeeId ? input.proxyReason : null,
+      submittedByUserId: actor.userId,
+      submittedOnBehalf: Boolean(input.employeeId),
+      targetDate: workDate,
+    });
     const detail = await correctionDetail(transaction, request.id, actor.organizationId);
     const changes = correctionDiff(detail.entries).map(auditChange);
     await recordAudit(transaction, {
@@ -231,6 +307,164 @@ export async function createAttendanceCorrection(
       organizationId: actor.organizationId,
     });
     return detail;
+  });
+}
+
+export async function resubmitAttendanceCorrection(
+  db: AppDatabase,
+  actor: SessionActor,
+  requestId: string,
+  input: Readonly<{
+    entries: ReadonlyArray<CorrectionEntryInput>;
+    expectedCaseVersion: number;
+    reason: string;
+    workDate: string;
+  }>,
+) {
+  requirePermission(actor, "self:write");
+  const workDate = validateWorkDate(input.workDate);
+  const reason = input.reason.trim();
+  if (!reason || reason.length > 1000) {
+    throw new AttendanceCorrectionValidationError("修正理由を1,000文字以内で入力してください。");
+  }
+  const selfAccess = await approvalCaseSelfAccessForDomainRequest(db, actor, {
+    attendanceCorrectionRequestId: requestId,
+  });
+  const approvalCaseId = selfAccess.approvalCase.id;
+  const context =
+    selfAccess.targetEmployeeUserId === actor.userId
+      ? await employeeContextForActor(db, actor, workDate)
+      : await employeeContextForTarget(
+          db,
+          actor,
+          selfAccess.approvalCase.targetEmployeeId,
+          workDate,
+        );
+  const requestedEntries = parseRequestedEntries(input.entries, workDate, context.timezone);
+
+  return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      attendanceCorrectionRequestId: requestId,
+    });
+    await lockAttendanceMonth(transaction, actor.organizationId, workDate.slice(0, 7));
+    await assertAttendanceMonthOpen(transaction, actor.organizationId, workDate);
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${`${context.employeeId}:${workDate}`}))`,
+    );
+    const [request] = await transaction
+      .select()
+      .from(attendanceCorrectionRequests)
+      .where(
+        and(
+          eq(attendanceCorrectionRequests.id, requestId),
+          eq(attendanceCorrectionRequests.organizationId, actor.organizationId),
+          eq(attendanceCorrectionRequests.employeeId, context.employeeId),
+          eq(attendanceCorrectionRequests.status, "returned"),
+        ),
+      )
+      .limit(1);
+    if (!request) throw new AttendanceCorrectionConflictError();
+    const [day] = await transaction
+      .select()
+      .from(attendanceDays)
+      .where(
+        and(
+          eq(attendanceDays.employeeId, context.employeeId),
+          eq(attendanceDays.workDate, workDate),
+        ),
+      )
+      .limit(1);
+    const originalEvents = day ? await effectiveAttendanceEvents(transaction, day.id) : [];
+    const originalIds = new Set(originalEvents.map((event) => event.id));
+    if (
+      requestedEntries.some(
+        (entry) => entry.originalEventId && !originalIds.has(entry.originalEventId),
+      )
+    ) {
+      throw new AttendanceCorrectionConflictError();
+    }
+    if (eventSignature(originalEvents) === eventSignature(requestedEntries)) {
+      throw new AttendanceCorrectionValidationError("元の打刻から変更された内容がありません。");
+    }
+
+    await transaction
+      .delete(attendanceCorrectionEntries)
+      .where(eq(attendanceCorrectionEntries.requestId, requestId));
+    if (originalEvents.length) {
+      await transaction.insert(attendanceCorrectionEntries).values(
+        originalEvents.map((event, position) => ({
+          kind: "original" as const,
+          occurredAt: event.occurredAt,
+          originalEventId: event.id,
+          position,
+          requestId,
+          type: event.type,
+        })),
+      );
+    }
+    if (requestedEntries.length) {
+      await transaction.insert(attendanceCorrectionEntries).values(
+        requestedEntries.map((entry, position) => ({
+          kind: "requested" as const,
+          occurredAt: entry.occurredAt,
+          originalEventId: entry.originalEventId,
+          position,
+          requestId,
+          type: entry.type,
+        })),
+      );
+    }
+    const [updatedRequest] = await transaction
+      .update(attendanceCorrectionRequests)
+      .set({
+        attendanceDayId: day?.id ?? null,
+        baseRevision: day?.revision ?? 0,
+        reason,
+        reviewComment: null,
+        reviewedAt: null,
+        reviewerUserId: null,
+        status: "pending",
+        updatedAt: new Date(),
+        workDate,
+      })
+      .where(
+        and(
+          eq(attendanceCorrectionRequests.id, requestId),
+          eq(attendanceCorrectionRequests.status, "returned"),
+        ),
+      )
+      .returning();
+    if (!updatedRequest) throw new AttendanceCorrectionConflictError();
+    const approvalCase = await appendApprovalRevisionAndResubmit(transaction, actor, {
+      approvalCaseId,
+      expectedVersion: input.expectedCaseVersion,
+      snapshot: {
+        attendanceDayId: updatedRequest.attendanceDayId,
+        baseRevision: updatedRequest.baseRevision,
+        employeeId: updatedRequest.employeeId,
+        entries: [
+          ...originalEvents.map((event, position) => ({
+            kind: "original" as const,
+            occurredAt: event.occurredAt.toISOString(),
+            originalEventId: event.id,
+            position,
+            type: event.type,
+          })),
+          ...requestedEntries.map((entry, position) => ({
+            kind: "requested" as const,
+            occurredAt: entry.occurredAt.toISOString(),
+            originalEventId: entry.originalEventId,
+            position,
+            type: entry.type,
+          })),
+        ],
+        reason: updatedRequest.reason,
+        requestId: updatedRequest.id,
+        requestType: "attendance_correction",
+        workDate: updatedRequest.workDate,
+      },
+    });
+    return { approvalCase, request: updatedRequest };
   });
 }
 
@@ -269,7 +503,13 @@ export async function cancelAttendanceCorrection(
   requestId: string,
 ) {
   requirePermission(actor, "self:write");
+  const selfAccess = await approvalCaseSelfAccessForDomainRequest(db, actor, {
+    attendanceCorrectionRequestId: requestId,
+  });
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      attendanceCorrectionRequestId: requestId,
+    });
     const [request] = await transaction
       .select({
         employeeId: attendanceCorrectionRequests.employeeId,
@@ -282,15 +522,14 @@ export async function cancelAttendanceCorrection(
         and(
           eq(attendanceCorrectionRequests.id, requestId),
           eq(attendanceCorrectionRequests.organizationId, actor.organizationId),
-          eq(attendanceCorrectionRequests.requestedByUserId, actor.userId),
+          eq(attendanceCorrectionRequests.employeeId, selfAccess.approvalCase.targetEmployeeId),
         ),
       )
       .limit(1);
     if (!request) throw new AuthorizationError();
     await lockAttendanceMonth(transaction, actor.organizationId, request.workDate.slice(0, 7));
     await assertAttendanceMonthOpen(transaction, actor.organizationId, request.workDate);
-    await requireEmployeeScope(transaction, actor, request.employeeId);
-    if (request.status !== "pending") {
+    if (request.status !== "pending" && request.status !== "returned") {
       throw new AttendanceCorrectionConflictError("審査済みの申請は取り消せません。");
     }
     const [cancelled] = await transaction
@@ -299,11 +538,21 @@ export async function cancelAttendanceCorrection(
       .where(
         and(
           eq(attendanceCorrectionRequests.id, requestId),
-          eq(attendanceCorrectionRequests.status, "pending"),
+          or(
+            eq(attendanceCorrectionRequests.status, "pending"),
+            eq(attendanceCorrectionRequests.status, "returned"),
+          ),
         ),
       )
       .returning();
     if (!cancelled) throw new AttendanceCorrectionConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: request.status,
+      organizationId: actor.organizationId,
+      reference: { attendanceCorrectionRequestId: request.id },
+      status: "cancelled",
+    });
     const detail = await correctionDetail(transaction, request.id, actor.organizationId);
     await recordAudit(transaction, {
       action: "attendance_correction_cancelled",
@@ -476,14 +725,26 @@ export async function reviewAttendanceCorrection(
   db: AppDatabase,
   actor: SessionActor,
   requestId: string,
-  input: Readonly<{ comment?: string; decision: "approve" | "reject" }>,
+  input: Readonly<{
+    approvalCaseVersion?: number;
+    comment?: string;
+    decision: "approve" | "reject";
+  }>,
 ) {
-  requirePermission(actor, "attendance:manage");
+  await assertDomainApprovalReviewAccess(
+    db,
+    actor,
+    { attendanceCorrectionRequestId: requestId },
+    input.approvalCaseVersion,
+  );
   const comment = input.comment?.trim() ?? "";
   if (input.decision === "reject" && !comment) {
     throw new AttendanceCorrectionValidationError("却下理由を入力してください。");
   }
   return db.transaction(async (transaction) => {
+    await lockApprovalCaseForDomain(transaction, actor.organizationId, {
+      attendanceCorrectionRequestId: requestId,
+    });
     let detail = await correctionDetail(transaction, requestId, actor.organizationId);
     await lockAttendanceMonth(
       transaction,
@@ -515,6 +776,16 @@ export async function reviewAttendanceCorrection(
         )
         .returning();
       if (!rejected) throw new AttendanceCorrectionConflictError();
+      await syncApprovalCaseStatus(transaction, {
+        actorUserId: actor.userId,
+        expectedStatus: "pending",
+        expectedVersion: input.approvalCaseVersion,
+        organizationId: actor.organizationId,
+        reference: { attendanceCorrectionRequestId: requestId },
+        reviewComment: comment,
+        reviewerUserId: actor.userId,
+        status: "rejected",
+      });
       const changes = correctionDiff(detail.entries).map(auditChange);
       await recordAudit(transaction, {
         action: "attendance_correction_rejected",
@@ -639,6 +910,16 @@ export async function reviewAttendanceCorrection(
       )
       .returning();
     if (!approved) throw new AttendanceCorrectionConflictError();
+    await syncApprovalCaseStatus(transaction, {
+      actorUserId: actor.userId,
+      expectedStatus: "pending",
+      expectedVersion: input.approvalCaseVersion,
+      organizationId: actor.organizationId,
+      reference: { attendanceCorrectionRequestId: requestId },
+      reviewComment: comment || null,
+      reviewerUserId: actor.userId,
+      status: "approved",
+    });
     const changes = correctionDiff(detail.entries).map(auditChange);
     await recordAudit(transaction, {
       action: "attendance_correction_approved",
@@ -668,14 +949,14 @@ export async function reviewAttendanceCorrection(
   });
 }
 
-export async function countPendingAttendanceCorrections(db: AppDatabase, organizationId: string) {
+export async function countOpenAttendanceCorrections(db: AppDatabase, organizationId: string) {
   const [result] = await db
     .select({ value: count() })
     .from(attendanceCorrectionRequests)
     .where(
       and(
         eq(attendanceCorrectionRequests.organizationId, organizationId),
-        eq(attendanceCorrectionRequests.status, "pending"),
+        inArray(attendanceCorrectionRequests.status, ["pending", "returned"]),
       ),
     );
   return result.value;

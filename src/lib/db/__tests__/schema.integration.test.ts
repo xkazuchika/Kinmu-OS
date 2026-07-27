@@ -299,7 +299,10 @@ describeDatabase("database organization boundaries", () => {
     const indexes = new Map(result.map((row) => [row.indexname, row.indexdef]));
 
     expect(indexes.get("attendance_correction_requests_pending_unique")).toContain(
-      "WHERE (status = 'pending'",
+      "WHERE (status <> ALL",
+    );
+    expect(indexes.get("attendance_correction_requests_pending_unique")).toContain(
+      "'cancelled'::attendance_correction_status",
     );
     expect(indexes.get("attendance_corrections_org_status_created_idx")).toContain(
       "organization_id, status, created_at",

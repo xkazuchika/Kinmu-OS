@@ -7,7 +7,7 @@ import { initialSetupLinks, userSessions, users } from "@/lib/db/schema";
 
 const SETUP_LINK_LIFETIME_MS = 48 * 60 * 60 * 1_000;
 
-export type ManagedUserRole = "hr_admin" | "employee" | "owner";
+export type ManagedUserRole = "approver" | "employee" | "hr_admin" | "owner";
 
 export class UserManagementError extends Error {
   constructor(message: string) {
