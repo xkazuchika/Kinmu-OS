@@ -5,7 +5,6 @@ COMPOSE_FILE="${COMPOSE_FILE:-compose.production.yaml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-FILE="$BACKUP_DIR/kinmu-$TIMESTAMP.dump"
 test -f "$ENV_FILE"
 
 if docker compose version >/dev/null 2>&1; then
@@ -18,7 +17,11 @@ else
 fi
 
 mkdir -p "$BACKUP_DIR"
-compose exec -T db pg_dump \
-  -U "${POSTGRES_USER:-kinmu}" -d "${POSTGRES_DB:-kinmu}" -Fc > "$FILE"
-chmod 600 "$FILE"
+umask 077
+PARTIAL="$(mktemp "$BACKUP_DIR/kinmu-$TIMESTAMP-XXXXXX")"
+FILE="$PARTIAL.dump"
+trap 'rm -f "$PARTIAL"' EXIT
+trap 'exit 1' HUP INT TERM
+compose exec -T db sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$PARTIAL"
+ln "$PARTIAL" "$FILE"
 echo "$FILE"

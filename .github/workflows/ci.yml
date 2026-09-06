@@ -68,8 +68,40 @@ jobs:
       - name: Build application
         run: pnpm build
 
-      - name: Audit production dependencies
+      - name: Prepare isolated browser database
+        env:
+          PGPASSWORD: kinmu
+        run: createdb --host localhost --username kinmu kinmu_e2e
+
+      - name: Migrate browser database
+        env:
+          DATABASE_URL: postgresql://kinmu:kinmu@localhost:5432/kinmu_e2e
+        run: pnpm db:migrate
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser tests against production build
+        env:
+          APP_URL: http://127.0.0.1:3190
+          DATABASE_URL: postgresql://kinmu:kinmu@localhost:5432/kinmu_e2e
+          E2E_BASE_URL: http://127.0.0.1:3190
+          SESSION_SECRET: isolated-ci-session-secret-not-for-production
+        run: pnpm test:e2e
+
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: /tmp/kinmu-os-playwright
+          if-no-files-found: ignore
+
+      - name: Audit all dependencies
         run: pnpm security:audit
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
 
       - name: List production dependency licenses
         run: pnpm licenses:check

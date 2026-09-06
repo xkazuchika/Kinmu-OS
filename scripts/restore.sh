@@ -25,12 +25,11 @@ else
   exit 1
 fi
 
-TABLE_COUNT="$(compose exec -T db psql -U "${POSTGRES_USER:-kinmu}" -d "${POSTGRES_DB:-kinmu}" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public';")"
+TABLE_COUNT="$(compose exec -T db sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$1"' sh "SELECT count(*) FROM pg_tables WHERE schemaname='public';")"
 if [ "$TABLE_COUNT" -ne 0 ]; then
   echo "Restore refused: the target database is not empty." >&2
   exit 1
 fi
 
-compose exec -T db pg_restore \
-  -U "${POSTGRES_USER:-kinmu}" -d "${POSTGRES_DB:-kinmu}" --exit-on-error < "$FILE"
+compose exec -T db sh -c 'exec pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --exit-on-error --single-transaction' < "$FILE"
 echo "Restore completed."

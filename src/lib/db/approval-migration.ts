@@ -85,7 +85,10 @@ export async function verifyApprovalMigration(
           ON leave_request.id = approval_case.leave_request_id
         LEFT JOIN overtime_work_requests overtime_request
           ON overtime_request.id = approval_case.overtime_work_request_id
-        WHERE approval_case.reviewer_user_id IS DISTINCT FROM COALESCE(
+        -- Backfilled review details must match exactly until the first operation.
+        -- Runtime operations record domain and case timestamps independently.
+        WHERE approval_case.version = 0 AND (
+          approval_case.reviewer_user_id IS DISTINCT FROM COALESCE(
             attendance_request.reviewer_user_id,
             leave_request.reviewer_user_id,
             overtime_request.reviewer_user_id
@@ -105,6 +108,7 @@ export async function verifyApprovalMigration(
             leave_request.cancelled_at,
             overtime_request.cancelled_at
           )
+        )
       )::integer AS "reviewDetailMismatchCount"
   `)) as unknown as ApprovalMigrationVerification[];
 

@@ -2,7 +2,11 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
 import { describe, expect, it } from "vitest";
+
+import { verifyApprovalMigration } from "@/lib/db/approval-migration";
+import * as schema from "@/lib/db/schema";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
@@ -294,6 +298,52 @@ async function createLegacyRequests(connection: postgres.Sql) {
 }
 
 describeDatabase("v0.8 approval migration", () => {
+  it("checks untouched backfills strictly but permits later operation timestamps on upgrade", async () => {
+    await withTemporaryDatabase(databaseUrl!, async (connection) => {
+      const files = await migrationFiles();
+      await applyMigrationFiles(
+        connection,
+        files.filter((file) => Number(file.slice(0, 4)) <= 16),
+      );
+      const fixture = await createLegacyRequests(connection);
+      await applyMigrationFiles(
+        connection,
+        files.filter((file) => Number(file.slice(0, 4)) >= 17),
+      );
+      const db = drizzle({ client: connection, schema });
+      await expect(verifyApprovalMigration(db)).resolves.toMatchObject({
+        domainRequestCount: 3,
+        approvalCaseCount: 3,
+        reviewDetailMismatchCount: 0,
+      });
+
+      await connection`
+        UPDATE approval_cases SET reviewed_at = reviewed_at + interval '3 milliseconds'
+        WHERE leave_request_id = ${fixture.leaveRequest.id}
+      `;
+      await expect(verifyApprovalMigration(db)).rejects.toThrow("審査情報不一致=1");
+
+      // v0.8 actions increment the case version and can record a separate timestamp.
+      await connection`
+        UPDATE approval_cases SET version = version + 1
+        WHERE leave_request_id = ${fixture.leaveRequest.id}
+      `;
+      await expect(verifyApprovalMigration(db)).resolves.toMatchObject({
+        reviewDetailMismatchCount: 0,
+      });
+      await expect(verifyApprovalMigration(db)).resolves.toMatchObject({
+        reviewDetailMismatchCount: 0,
+      });
+
+      // Structural verification still applies after normal business operations.
+      await connection`
+        UPDATE approval_cases SET status = 'rejected', review_comment = '状態照合の検証'
+        WHERE leave_request_id = ${fixture.leaveRequest.id}
+      `;
+      await expect(verifyApprovalMigration(db)).rejects.toThrow("状態不一致=1");
+    });
+  }, 30_000);
+
   it("backfills every legacy request with its status, department, and immutable revision", async () => {
     await withTemporaryDatabase(databaseUrl!, async (connection) => {
       const files = await migrationFiles();

@@ -62,6 +62,8 @@ pnpm dev
 
 `http://localhost:3000/setup` で最初の組織と所有者を作成します。品質チェックは `pnpm typecheck && pnpm lint && pnpm test && pnpm build`、実画面テストはアプリ起動後に `pnpm test:e2e` です。
 
+`pnpm test` はTS・TSXの単体／UI部品テストを実行します。DB統合・移行・100名性能テストを含めるには、空の専用DBへマイグレーションを適用し、`TEST_DATABASE_URL`を指定してください。統合テストは対象DBのデータを初期化するため、業務用DBを指定しないでください。未指定時はDBテストがスキップされます。CIでは専用DBで全テストを実行し、別の空DBと本番ビルドでChromiumの画面テストを実行します。ローカルの画面テスト先は`E2E_BASE_URL`で指定できます。
+
 ## 本番導入
 
 1. `.env.production.example` を `.env.production` へコピーし、強い `POSTGRES_PASSWORD` と32文字以上の `SESSION_SECRET` を設定します。
@@ -96,7 +98,7 @@ v0.8で承認経路、引継ぎ、改訂、通知を作成したDBへ旧アプ�
 
 ## バックアップと復元
 
-`scripts/backup.sh` はUTC日時入りのPostgreSQLカスタム形式ファイルを作り、権限を600にします。月次締めの前後と更新前に取得し、確定CSVとともに別ホストまたは暗号化ストレージへ複製して、定期的に復元訓練を行ってください。
+`scripts/backup.sh` はUTC日時と一意な接尾辞入りのPostgreSQLカスタム形式ファイルを作ります。作成開始時から所有者だけが読み書きできる権限600とし、成功時だけ`.dump`を公開します。失敗時は一時ファイルを削除し、既存のバックアップを上書きしません。バックアップ対象はDB内の業務データで、アプリイメージや環境設定ファイルは含みません。バックアップ・空DB検査・復元はDBコンテナの`POSTGRES_USER`・`POSTGRES_DB`を利用するため、`.env.production`だけに独自DB設定を記載した場合も同じ対象を扱います。月次締めの前後と更新前に取得し、確定CSVとともに別ホストまたは暗号化ストレージへ複製して、定期的に復元訓練を行ってください。
 
 復元は空のデータベースだけを対象にします。
 
@@ -104,13 +106,14 @@ v0.8で承認経路、引継ぎ、改訂、通知を作成したDBへ旧アプ�
 CONFIRM_RESTORE=EMPTY_DATABASE scripts/restore.sh backups/kinmu-YYYYMMDDTHHMMSSZ.dump
 ```
 
-既存テーブルがある場合、復元スクリプトは停止します。復元後は `docker compose -f compose.production.yaml up -d app` を実行し、`/api/health`、ログイン、従業員台帳、勤務カレンダー、休暇残高、勤怠、直近の締め状態・リビジョンに加え、給与プロファイル版、外部コード設定件数、run一覧、保管済みCSVのSHA-256が一致することを確認します。
+既存テーブルがある場合、復元スクリプトは停止します。復元は単一トランザクションで実行し、途中で失敗した場合は適用を取り消します。復元後は `docker compose -f compose.production.yaml up -d app` を実行し、`/api/health`、ログイン、従業員台帳、勤務カレンダー、休暇残高、勤怠、直近の締め状態・リビジョンに加え、給与プロファイル版、外部コード設定件数、run一覧、保管済みCSVのSHA-256が一致することを確認します。
 
 ## トラブルシュート
 
 - アプリが起動しない: `docker compose -f compose.production.yaml logs migrator app db` を確認します。
 - ログインが保持されない: `APP_URL` が実際のHTTPS URLか、リバースプロキシがHTTPSを終端しているか確認します。
 - DB接続エラー: `.env.production` のDB名・利用者・パスワードを揃えます。
+- `/api/health`が503／appがunhealthy: このチェックはDBを含む稼働可否を表します。DB問い合わせ成功時は200、接続失敗・約1.5秒の待機期限超過時は503を返します。応答はキャッシュされず、資格情報やDBエラー詳細は含みません。DBサービスの状態と接続設定を確認してください。
 - 対応ソースのリンクが違う: `SOURCE_CODE_URL` を稼働版と同じコミットまたは配布物へ更新します。
 - 給与CSVを生成できない: 対象月の締め、公開プロファイル、外部従業員コードを確認し、全件検査の解消方法に従います。
 - 給与CSVを再ダウンロードできない: generator versionとDB復元状態を確認し、整合性エラーの監査ログを保全します。
