@@ -1,6 +1,7 @@
 .git
 .next
 .codex
+.agents
 .opencode
 node_modules
 coverage

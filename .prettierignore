@@ -4,5 +4,6 @@ coverage
 drizzle
 pnpm-lock.yaml
 .codex
+.agents
 .opencode
 openspec
