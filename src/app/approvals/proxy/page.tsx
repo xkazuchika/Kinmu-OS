@@ -27,6 +27,17 @@ export default function ProxyRequestPage() {
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [actionContext, setActionContext] = useState({ date: "", employeeId: "" });
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const date = query.get("date") ?? "";
+    const employeeId = query.get("employeeId") ?? "";
+    const timer = window.setTimeout(() => {
+      setActionContext({ date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "", employeeId });
+      if (query.get("kind") === "leave") setKind("leave");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const load = useCallback(async () => {
     const [employeeResponse, leaveTypeResponse] = await Promise.all([
@@ -48,6 +59,7 @@ export default function ProxyRequestPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     setSubmitting(true);
     setError(undefined);
     setSuccess(undefined);
@@ -87,7 +99,7 @@ export default function ProxyRequestPage() {
       return;
     }
     setSuccess("対象者、実際の作成者、代理理由を分けて申請を作成しました。");
-    event.currentTarget.reset();
+    form.reset();
   }
 
   return (
@@ -144,8 +156,18 @@ export default function ProxyRequestPage() {
             <p>保存前に、対象者と代理理由をもう一度確認してください。</p>
           </div>
         </div>
-        <form key={kind} className="approval-proxy-form" onSubmit={submit}>
-          <SelectField id="employeeId" label="対象従業員" name="employeeId" required>
+        <form
+          key={`${kind}:${actionContext.date}:${actionContext.employeeId}:${employees.length}`}
+          className="approval-proxy-form"
+          onSubmit={submit}
+        >
+          <SelectField
+            id="employeeId"
+            label="対象従業員"
+            name="employeeId"
+            defaultValue={actionContext.employeeId}
+            required
+          >
             <option value="">選択してください</option>
             {employees.map((employee) => (
               <option key={employee.id} value={employee.id}>
@@ -165,7 +187,14 @@ export default function ProxyRequestPage() {
 
           {kind === "attendance" ? (
             <>
-              <Field id="workDate" label="勤務日" name="workDate" required type="date" />
+              <Field
+                id="workDate"
+                label="勤務日"
+                name="workDate"
+                defaultValue={actionContext.date}
+                required
+                type="date"
+              />
               <Field id="clockIn" label="出勤時刻" name="clockIn" optional type="datetime-local" />
               <Field
                 id="clockOut"
@@ -186,8 +215,22 @@ export default function ProxyRequestPage() {
                   </option>
                 ))}
               </SelectField>
-              <Field id="from" label="開始日" name="from" required type="date" />
-              <Field id="to" label="終了日" name="to" required type="date" />
+              <Field
+                id="from"
+                label="開始日"
+                name="from"
+                defaultValue={actionContext.date}
+                required
+                type="date"
+              />
+              <Field
+                id="to"
+                label="終了日"
+                name="to"
+                defaultValue={actionContext.date}
+                required
+                type="date"
+              />
               <SelectField defaultValue="full_day" id="unit" label="休暇単位" name="unit">
                 <option value="full_day">全日</option>
                 <option value="half_day">半日</option>
@@ -200,7 +243,14 @@ export default function ProxyRequestPage() {
                 <option value="overtime">残業</option>
                 <option value="holiday_work">休日出勤</option>
               </SelectField>
-              <Field id="workDate" label="勤務日" name="workDate" required type="date" />
+              <Field
+                id="workDate"
+                label="勤務日"
+                name="workDate"
+                defaultValue={actionContext.date}
+                required
+                type="date"
+              />
               <Field id="startTime" label="予定開始" name="startTime" required type="time" />
               <Field id="endTime" label="予定終了" name="endTime" required type="time" />
               <Field

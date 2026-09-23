@@ -31,6 +31,8 @@ export default function ActivatePage({ params }: { params: Promise<{ token: stri
       return;
     }
 
+    // Authentication changes must discard the previous session’s client/router cache.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign("/");
   }
 

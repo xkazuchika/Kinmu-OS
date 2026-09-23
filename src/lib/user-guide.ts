@@ -19,6 +19,14 @@ export const GUIDE_ROOT = path.join(process.cwd(), "docs", "user-guide");
 
 export const guideCatalog = [
   {
+    slug: "workflow",
+    title: "業務の全体フロー",
+    description: "初期設定、日々の記録と申請、審査、月次締め、CSV出力までの流れを確認します。",
+    roles: ["owner", "hr_admin", "approver", "employee"],
+    order: 5,
+    file: "workflow.md",
+  },
+  {
     slug: "overview",
     title: "機能一覧と役割",
     description: "Kinmu-OSでできること、役割ごとの権限、現行版の制限を確認します。",
@@ -169,6 +177,7 @@ export function guidesForRole(role: GuideRole) {
   validateGuideCatalog();
   const preferred: Readonly<Record<GuideRole, readonly string[]>> = {
     approver: [
+      "workflow",
       "leave-requests",
       "overtime-management",
       "notifications",
@@ -178,6 +187,7 @@ export function guidesForRole(role: GuideRole) {
       "troubleshooting",
     ],
     employee: [
+      "workflow",
       "overtime-requests",
       "notifications",
       "leave-requests",
@@ -187,6 +197,7 @@ export function guidesForRole(role: GuideRole) {
       "troubleshooting",
     ],
     hr_admin: [
+      "workflow",
       "admin-setup",
       "work-calendar",
       "leave-management",
@@ -202,6 +213,7 @@ export function guidesForRole(role: GuideRole) {
       "troubleshooting",
     ],
     owner: [
+      "workflow",
       "admin-setup",
       "work-calendar",
       "leave-management",

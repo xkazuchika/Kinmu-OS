@@ -1,3 +1,4 @@
+import { ActionItemsPanel } from "@/components/action-items-panel";
 import { cookies } from "next/headers";
 import { and, count, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import Link from "next/link";
@@ -52,6 +53,7 @@ function EmployeeHome({
         現在の状態を確認し、次の打刻を記録します。
       </PageHeader>
       <AttendancePanel initialState={attendance} />
+      <ActionItemsPanel summary />
       <section className="home-section">
         <h2>
           <ClockIcon /> 今日の予定
@@ -133,6 +135,7 @@ function ManagementHome({
       >
         確認が必要な項目と、次に進める月次業務をまとめます。
       </PageHeader>
+      <ActionItemsPanel summary />
       {initialProgress.completedCount < initialProgress.totalCount ? (
         <WorkflowProgressPanel progress={initialProgress} title="初期設定" />
       ) : (

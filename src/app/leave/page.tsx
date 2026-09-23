@@ -94,6 +94,17 @@ export default function MyLeavePage() {
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [actionContext, setActionContext] = useState({ date: "", employeeId: "" });
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const date = query.get("date") ?? "";
+    const employeeId = query.get("employeeId") ?? "";
+    const timer = window.setTimeout(() => {
+      setActionContext({ date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "", employeeId });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   const [dirty, setDirty] = useState(false);
   useUnsavedChanges(dirty);
 
@@ -251,7 +262,12 @@ export default function MyLeavePage() {
           <h2 id="leave-request-heading">休暇を申請</h2>
           <p>休日は自動で除外され、送信前に対象勤務日と申請後残高を確認できます。</p>
         </div>
-        <form className="feature-form" onChange={() => setDirty(true)} onSubmit={previewRequest}>
+        <form
+          key={actionContext.date}
+          className="feature-form"
+          onChange={() => setDirty(true)}
+          onSubmit={previewRequest}
+        >
           <SelectField
             description="有給・無給と、残高を消費する種別かを確認してください。"
             id="request-leave-type"
@@ -277,7 +293,7 @@ export default function MyLeavePage() {
             <option value="half_day">半日</option>
           </SelectField>
           <Field
-            defaultValue={today()}
+            defaultValue={actionContext.date || today()}
             description="休日は送信前の確認で自動的に除外されます。"
             id="request-from"
             label="開始日"
@@ -286,7 +302,7 @@ export default function MyLeavePage() {
             type="date"
           />
           <Field
-            defaultValue={today()}
+            defaultValue={actionContext.date || today()}
             id="request-to"
             label="終了日"
             name="to"

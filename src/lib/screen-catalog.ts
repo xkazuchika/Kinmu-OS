@@ -46,7 +46,8 @@ type GuideSlug =
   | "payroll-exports"
   | "reports-and-audit"
   | "troubleshooting"
-  | "work-calendar";
+  | "work-calendar"
+  | "workflow";
 
 export const screenGuideSlugs = new Set<GuideSlug>([
   "admin-setup",
@@ -63,6 +64,7 @@ export const screenGuideSlugs = new Set<GuideSlug>([
   "reports-and-audit",
   "troubleshooting",
   "work-calendar",
+  "workflow",
 ]);
 
 export type ScreenDefinition = Readonly<{
@@ -91,6 +93,7 @@ const managementNavigation: RoleNavigation = {
       icon: "clock",
       label: "日々の勤怠",
       items: [
+        { href: "/action-items", icon: "bell", id: "action-items", label: "要対応" },
         { href: "/attendance", icon: "clock", id: "attendance-status", label: "勤怠状況" },
         { href: "/calendar", icon: "calendar", id: "work-calendar", label: "勤務カレンダー" },
       ],
@@ -204,6 +207,7 @@ const employeeNavigation: RoleNavigation = {
       icon: "clock",
       label: "勤務",
       items: [
+        { href: "/action-items", icon: "bell", id: "action-items", label: "要対応" },
         {
           href: "/attendance/me",
           icon: "clock",
@@ -275,6 +279,18 @@ const approverNavigation: RoleNavigation = {
 
 export const screenCatalog = [
   {
+    id: "action-items",
+    pattern: "/action-items",
+    title: "要対応",
+    area: "日々の勤怠",
+    roles: allRoles,
+    purpose: "勤怠と申請の対応漏れを確認します。",
+    completion: "次の担当と対応先を確認し、不備を解消できる",
+    primaryAction: "要対応を確認",
+    guideSlug: "notifications",
+    navigationId: "action-items",
+  },
+  {
     id: "home",
     pattern: "/",
     title: "ホーム",
@@ -283,7 +299,7 @@ export const screenCatalog = [
     purpose: "現在の勤怠状況を確認し、必要な対応へ進みます。",
     completion: "次に必要な業務または日常操作を開ける",
     primaryAction: "次にやることを確認",
-    guideSlug: "overview",
+    guideSlug: "workflow",
     navigationId: "home",
   },
   {
@@ -715,7 +731,7 @@ export const screenCatalog = [
     purpose: "役割に合う機能説明、操作手順、トラブル対処を確認します。",
     completion: "必要な記事または元の業務画面へ進める",
     primaryAction: "ガイドを選択",
-    guideSlug: "overview",
+    guideSlug: "workflow",
     navigationId: "guide",
   },
   {

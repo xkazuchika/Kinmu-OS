@@ -71,6 +71,16 @@ export default function LeaveReviewPage() {
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [actionContext, setActionContext] = useState({ date: "", employeeId: "" });
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const date = query.get("date") ?? "";
+    const employeeId = query.get("employeeId") ?? "";
+    const timer = window.setTimeout(() => {
+      setActionContext({ date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "", employeeId });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const load = useCallback(async () => {
     const [requestResponse, employeeResponse] = await Promise.all([
@@ -332,8 +342,18 @@ export default function LeaveReviewPage() {
             過去の未締め所定勤務日で、打刻・承認済み休暇がない場合だけ確定できます。残高は消費しません。
           </p>
         </div>
-        <form className="feature-form" onSubmit={confirmAbsence}>
-          <SelectField id="absence-employee" label="従業員" name="employeeId" required>
+        <form
+          key={`${actionContext.date}:${actionContext.employeeId}:${employees.length}`}
+          className="feature-form"
+          onSubmit={confirmAbsence}
+        >
+          <SelectField
+            defaultValue={actionContext.employeeId}
+            id="absence-employee"
+            label="従業員"
+            name="employeeId"
+            required
+          >
             <option value="">選択してください</option>
             {employees.map((employee) => (
               <option key={employee.id} value={employee.id}>
@@ -342,6 +362,7 @@ export default function LeaveReviewPage() {
             ))}
           </SelectField>
           <Field
+            defaultValue={actionContext.date}
             id="absence-date"
             label="対象日"
             max={today()}

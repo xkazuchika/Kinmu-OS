@@ -141,6 +141,7 @@ export default function AttendanceManagementPage() {
   const [hasLoaded, setHasLoaded] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [selectedEmployee, setSelectedEmployee] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
   const [selectedRequestStatus, setSelectedRequestStatus] = useState("");
   const [selectedOvertimeStatus, setSelectedOvertimeStatus] = useState("");
@@ -163,6 +164,17 @@ export default function AttendanceManagementPage() {
           ...(requestStatus ? { requestStatus } : {}),
           ...(status ? { status } : {}),
         });
+    const previous = new URLSearchParams(window.location.search);
+    for (const key of ["employeeId", "departmentId", "date", "returnTo"]) {
+      if (!event && previous.get(key)) parameters.set(key, previous.get(key)!);
+    }
+    if (previous.get("returnTo")) parameters.set("returnTo", previous.get("returnTo")!);
+    if (
+      parameters.get("date") &&
+      !parameters.get("date")!.startsWith(parameters.get("month") ?? month)
+    )
+      parameters.delete("date");
+    setSelectedEmployee(parameters.get("employeeId") ?? "");
     setSelectedMonth(parameters.get("month") ?? currentMonth);
     setSelectedStatus(parameters.get("status") ?? "");
     setSelectedRequestStatus(parameters.get("requestStatus") ?? "");
@@ -189,7 +201,8 @@ export default function AttendanceManagementPage() {
       setHasLoaded(true);
       return;
     }
-    setAttendance(payload.attendance ?? []);
+    const date = parameters.get("date");
+    setAttendance((payload.attendance ?? []).filter((day) => !date || day.workDate === date));
     setDepartments(
       ((await departmentResponse.json()) as { departments?: Department[] }).departments ?? [],
     );
@@ -313,7 +326,13 @@ export default function AttendanceManagementPage() {
               </option>
             ))}
           </SelectField>
-          <SelectField id="attendance-filter-employee" label="従業員" name="employeeId">
+          <SelectField
+            id="attendance-filter-employee"
+            label="従業員"
+            name="employeeId"
+            value={selectedEmployee}
+            onChange={(event) => setSelectedEmployee(event.target.value)}
+          >
             <option value="">すべて</option>
             {employees.map((employee) => (
               <option key={employee.id} value={employee.id}>

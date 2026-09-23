@@ -6,7 +6,7 @@ Kinmu-OSは、従業員100名以下の組織を対象にしたセルフホスト
 
 現行バージョンは、所有者・労務管理者向けの初期設定、利用者・部署・従業員・勤務ルール・勤務カレンダー・休暇種別・残高管理、承認経路・引継ぎ・代理申請、横断審査、月次締め、通常CSV、給与連携CSV、監査ログと、承認担当者向けの割当受信箱、従業員向けの打刻、勤務実績、申請履歴、差し戻し後の再申請、通知、プロフィールを提供します。
 
-リポジトリでは [利用ガイドの目次](docs/user-guide/overview.md) から役割別の手順を確認できます。稼働中のアプリでは各画面の「この画面の使い方」から、現在の条件を保ったまま対応記事を開けます。ガイドの対象バージョンは0.8.0です。
+リポジトリでは [業務の全体フロー](docs/user-guide/workflow.md) で初期設定から月次の出力までの順序を確認し、[利用ガイドの目次](docs/user-guide/overview.md) から各手順を参照できます。稼働中のアプリでは各画面の「この画面の使い方」から、現在の条件を保ったまま対応記事を開けます。ガイドの対象バージョンは0.8.0です。
 
 時間単位休暇、自動法令判定、多段承認、条件分岐する承認経路、メール等の外部通知は未対応です。給与・税・社会保険・割増賃金の計算、振込、給与明細、給与ソフトとのAPI同期、任意式、ベンダープリセットも対象外です。申請承認と集計、給与連携CSVは、法令や就業規則への適合を判定・保証するものではありません。
 
@@ -68,7 +68,7 @@ pnpm dev
 
 1. `.env.production.example` を `.env.production` へコピーし、強い `POSTGRES_PASSWORD` と32文字以上の `SESSION_SECRET` を設定します。
 2. `APP_URL` は利用者がアクセスするHTTPS URL、`SOURCE_CODE_URL` はこの稼働版に対応する公開ソースのURLにします。
-3. `docker compose --env-file .env.production -f compose.production.yaml up -d --build` を実行します。マイグレーションが失敗するとアプリは起動しません。
+3. `docker compose --env-file .env.production -f compose.production.yaml up -d --build` を実行します。マイグレーションが失敗するとアプリと通知workerは起動しません。
 4. `http://127.0.0.1:3100` をCaddy、nginx、TraefikなどのTLSリバースプロキシの背後で公開します。アプリのポートをインターネットへ直接公開しないでください。
 5. `/setup` で初期設定を一度だけ完了します。
 
@@ -83,7 +83,7 @@ BACKUP_DIR=/secure/backups scripts/backup.sh
 scripts/update.sh
 ```
 
-`update.sh` は新しいイメージを作成し、使い捨てmigratorを成功させてからアプリだけを入れ替えます。失敗時はアプリを入れ替えず、ログを確認します。
+`update.sh` はapp・worker・migratorをビルドした後、workerを停止して移行を実行し、成功時だけappとworkerを入れ替えます。ビルド失敗時は稼働中サービスを維持します。移行失敗時は旧appを維持し、workerを停止したままにします。ログから原因を直して再実行するか、更新前バックアップを別の空DBへ復元して対応する旧版を起動してください。
 各スクリプトは既定で `.env.production` を読みます。別の場所に置く場合は `ENV_FILE=/secure/kinmu.env` を指定します。
 
 v0.5からv0.6への更新は加算マイグレーションです。既存組織には未公開の「汎用給与連携」ドラフトが一件作成されます。公開するまで給与CSVは生成されず、既存の勤怠・通常CSV・ログイン動作は変わりません。更新後はログイン、既存の締めリビジョン、通常CSV、汎用ドラフトを確認し、利用先仕様に合わせてから公開してください。
@@ -96,6 +96,28 @@ v0.7からv0.8は加算マイグレーションです。既存の勤怠修正・
 
 v0.8で承認経路、引継ぎ、改訂、通知を作成したDBへ旧アプリを接続する運用は保証しません。切り戻す場合は、v0.8更新前バックアップを別の空DBへ復元し、v0.7のCompose設定で起動します。切り戻し後はログイン、既存申請件数、勤怠、月次締め、給与連携runを確認してください。
 
+## 要対応の通知worker
+
+「要対応」は未退勤・未解決勤務日・承認期限超過・再申請待ちを現在の権限で集計します。日次通知は独立した非rootのworkerが15分ごとに確認し、組織の現地時刻9時以降、組織・利用者・日付ごとに最大1件作成します。ログインや画面アクセスは不要です。停止期間の過去日分は送らず、再開した当日分だけを作成します。差し戻しは現地日付の翌日から対象です。
+
+```sh
+# 起動・状態・ログ
+docker compose --env-file .env.production -f compose.production.yaml up -d app worker
+docker compose --env-file .env.production -f compose.production.yaml ps
+docker compose --env-file .env.production -f compose.production.yaml logs --tail=50 worker
+# 手動の一回実行（常駐中でもDBの一意キーで重複を防止）
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps worker ./node_modules/.bin/tsx src/workers/action-reminders.ts --once
+# 停止・再開
+docker compose --env-file .env.production -f compose.production.yaml stop worker
+docker compose --env-file .env.production -f compose.production.yaml up -d --no-deps worker
+```
+
+開発中は `DATABASE_URL=... pnpm reminders`、一回実行は `DATABASE_URL=... pnpm reminders:once` です。ログは実行日時と組織数・生成数・失敗数のみで、氏名や理由を出しません。一回実行は失敗時に非ゼロ終了します。Composeのhealthcheckは状態ファイルの成功時刻と直近結果を検査し、失敗または30分超更新がない場合に異常を返します。`unhealthy` は自動再起動を意味しないため、監視で検知しDB接続・workerログを確認してください。状態ファイルは一時領域で、通知の重複防止はDBに保存されます。
+
+今回の移行は通知種別と通知の参照検査を追加します。更新後はworkerのhealth、要対応件数、既存通知の既読状態を確認してください。切り戻しは更新前バックアップを別の空DBへ復元し、対応する旧版のCompose設定で起動します。復元中はappとworkerを停止し、復元とマイグレーション成功後に両方を起動します。通知もバックアップに含まれ、復元済み当日通知は重複生成されません。
+
+実施したシナリオ、性能値、隔離環境の更新・復元結果は [要対応・日次通知の検証記録](docs/action-center-validation.md) にまとめています。
+
 ## バックアップと復元
 
 `scripts/backup.sh` はUTC日時と一意な接尾辞入りのPostgreSQLカスタム形式ファイルを作ります。作成開始時から所有者だけが読み書きできる権限600とし、成功時だけ`.dump`を公開します。失敗時は一時ファイルを削除し、既存のバックアップを上書きしません。バックアップ対象はDB内の業務データで、アプリイメージや環境設定ファイルは含みません。バックアップ・空DB検査・復元はDBコンテナの`POSTGRES_USER`・`POSTGRES_DB`を利用するため、`.env.production`だけに独自DB設定を記載した場合も同じ対象を扱います。月次締めの前後と更新前に取得し、確定CSVとともに別ホストまたは暗号化ストレージへ複製して、定期的に復元訓練を行ってください。
@@ -106,7 +128,7 @@ v0.8で承認経路、引継ぎ、改訂、通知を作成したDBへ旧アプ�
 CONFIRM_RESTORE=EMPTY_DATABASE scripts/restore.sh backups/kinmu-YYYYMMDDTHHMMSSZ.dump
 ```
 
-既存テーブルがある場合、復元スクリプトは停止します。復元は単一トランザクションで実行し、途中で失敗した場合は適用を取り消します。復元後は `docker compose -f compose.production.yaml up -d app` を実行し、`/api/health`、ログイン、従業員台帳、勤務カレンダー、休暇残高、勤怠、直近の締め状態・リビジョンに加え、給与プロファイル版、外部コード設定件数、run一覧、保管済みCSVのSHA-256が一致することを確認します。
+既存テーブルがある場合、復元スクリプトは停止します。復元は単一トランザクションで実行し、途中で失敗した場合は適用を取り消します。復元後は `docker compose -f compose.production.yaml up -d app worker` を実行し、`/api/health`、ログイン、従業員台帳、勤務カレンダー、休暇残高、勤怠、直近の締め状態・リビジョンに加え、給与プロファイル版、外部コード設定件数、run一覧、保管済みCSVのSHA-256が一致することを確認します。
 
 ## トラブルシュート
 

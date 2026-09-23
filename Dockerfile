@@ -12,6 +12,20 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 
+FROM dependencies AS migrator
+
+COPY drizzle ./drizzle
+COPY drizzle.config.ts tsconfig.json ./
+COPY src ./src
+
+CMD ["pnpm", "db:migrate"]
+
+FROM migrator AS worker
+RUN addgroup --system --gid 1001 reminder \
+  && adduser --system --uid 1001 reminder
+USER reminder
+CMD ["./node_modules/.bin/tsx", "src/workers/action-reminders.ts"]
+
 FROM base AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -20,14 +34,6 @@ ENV NODE_OPTIONS="--max-old-space-size=1024"
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN pnpm build
-
-FROM dependencies AS migrator
-
-COPY drizzle ./drizzle
-COPY drizzle.config.ts tsconfig.json ./
-COPY src ./src
-
-CMD ["pnpm", "db:migrate"]
 
 FROM node:22-alpine AS runner
 

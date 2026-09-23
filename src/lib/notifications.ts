@@ -178,6 +178,10 @@ export async function notificationTarget(
     )
     .limit(1);
   if (!notification) throw new AuthorizationError();
+  if (notification.entityType === "action_center") {
+    if (notification.entityId !== actor.userId) throw new AuthorizationError();
+    return { available: true, href: "/action-items", message: null } as const;
+  }
   if (notification.entityType === "approval_case") {
     const [approvalCase] = await db
       .select({

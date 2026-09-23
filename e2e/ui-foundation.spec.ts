@@ -1377,18 +1377,22 @@ test("proxy attendance correction is returned, revised, approved, and closed thr
   await expect(page.getByText("差し戻し中", { exact: true })).toBeVisible();
 
   await login(page, employee.email, employee.password);
-  await page.goto("/requests");
-  const returnedRow = page
-    .getByRole("row")
-    .filter({ hasText: workDate })
-    .filter({ hasText: "差し戻し・修正待ち" });
+  const actionReturn = `/action-items?kind=returned_request&month=${workDate.slice(0, 7)}`;
+  await page.goto(actionReturn);
+  const returnedRow = page.locator(".action-item-list > li").filter({ hasText: workDate });
   await expect(returnedRow).toHaveCount(1);
-  await returnedRow.getByRole("link", { name: "理由を確認して修正" }).click();
+  await returnedRow.getByRole("link", { name: "修正・再申請する" }).click();
   await expect(page.getByText("退勤時刻の根拠を確認して再申請してください。")).toBeVisible();
   await page.getByLabel("申請理由").fill("本人確認済み。退勤記録を再確認しました。");
   await page.getByRole("button", { name: "修正内容を再申請" }).click();
   await expect(page.getByText("修正内容を再申請しました。")).toBeVisible();
   await expect(page.getByText("第2版", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/action-items\\?kind=returned_request&month=${workDate.slice(0, 7)}$`),
+  );
+  await expect(page.locator(".action-item-list > li")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "0件中" })).toBeVisible();
 
   await login(page, approver.email, approver.password);
   await page.goto("/approvals?status=pending&requestType=attendance_correction");
@@ -1429,4 +1433,222 @@ test("proxy attendance correction is returned, revised, approved, and closed thr
   const closePayload = (await closeResponse.json()) as { error?: string };
   expect(closeResponse.ok(), closePayload.error).toBe(true);
   expect(consoleProblems).toEqual([]);
+});
+
+test("action center preserves filters, preselects correction context and resolves approved work", async ({
+  page,
+}) => {
+  const problems = collectConsoleProblems(page);
+  const workDate = "2026-08-04";
+  await login(page, employee.email, employee.password);
+  const initial = await page.request.post("/api/attendance/corrections", {
+    data: {
+      workDate,
+      reason: "要対応の未退勤検証",
+      entries: [{ type: "clock_in", occurredAt: `${workDate}T00:00:00Z` }],
+    },
+  });
+  expect(initial.ok(), await initial.text()).toBe(true);
+  const initialId = (await initial.json()).correction.request.id;
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const approved = await page.request.patch(`/api/attendance/correction-reviews/${initialId}`, {
+    data: { decision: "approve" },
+  });
+  expect(approved.ok(), await approved.text()).toBe(true);
+  const people = (await (await page.request.get("/api/employees")).json()).employees;
+  const target = people.find(
+    (person: { employeeNumber: string }) => person.employeeNumber === employee.employeeNumber,
+  );
+  const returnTo = `/action-items?month=2026-08&kind=open_punch&employeeId=${target.id}`;
+  await page.goto(returnTo);
+  await expect(page).toHaveTitle(/Kinmu-OS/);
+  await expect(page.getByRole("heading", { name: "要対応", exact: true, level: 1 })).toBeVisible();
+  const row = page.locator(".action-item-list > li").filter({ hasText: workDate });
+  await expect(row).toHaveCount(1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: "/tmp/kinmu-action-desktop.png", fullPage: true });
+  await row.getByRole("link", { name: "代理で修正を申請" }).click();
+  await expect(page.getByLabel("対象従業員")).toHaveValue(target.id);
+  await expect(page.getByLabel("勤務日")).toHaveValue(workDate);
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(returnTo);
+  await row.getByRole("link", { name: "勤務実績を確認" }).click();
+  await expect(page.locator("#absence-employee")).toHaveValue(target.id);
+  await expect(page.getByRole("row").filter({ hasText: workDate })).toHaveCount(1);
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await login(page, employee.email, employee.password);
+  await page.goto(returnTo);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await expect(row).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "/tmp/kinmu-action-mobile.png", fullPage: true });
+  const primary = row.getByRole("link", { name: "勤務実績を確認" });
+  await primary.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/attendance\/me/);
+  await expect(page.getByRole("link", { name: "要対応一覧へ戻る" })).toBeVisible();
+  const correction = await page.request.post("/api/attendance/corrections", {
+    data: {
+      workDate,
+      reason: "退勤を追加",
+      entries: [
+        { type: "clock_in", occurredAt: `${workDate}T00:00:00Z` },
+        { type: "clock_out", occurredAt: `${workDate}T09:00:00Z` },
+      ],
+    },
+  });
+  expect(correction.ok(), await correction.text()).toBe(true);
+  const correctionId = (await correction.json()).correction.request.id;
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await expect(row).toContainText("審査待ち");
+  await expect(row.getByRole("link", { name: "勤務実績を確認" })).toHaveCount(0);
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const review = await page.request.patch(`/api/attendance/correction-reviews/${correctionId}`, {
+    data: { decision: "approve" },
+  });
+  expect(review.ok(), await review.text()).toBe(true);
+  await page.goto(returnTo);
+  await expect(page.locator(".action-item-list > li")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "0件中" })).toBeVisible();
+  await page.getByRole("button", { name: "条件を解除" }).click();
+  await expect(page).toHaveURL(/action-items$/);
+  expect(problems).toEqual([]);
+});
+
+test("action center renders loading, empty, filtered-empty and retry states", async ({ page }) => {
+  await login(page, employee.email, employee.password);
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const empty = {
+    items: [],
+    total: 0,
+    allTotal: 0,
+    counts: { overdue_approval: 0, returned_request: 0, open_punch: 0, unresolved_day: 0 },
+    page: 1,
+    pageSize: 50,
+    checkedAt: new Date().toISOString(),
+    timezone: "Asia/Tokyo",
+    employees: [],
+    departments: [],
+  };
+  let state = "loading";
+  await page.route("**/api/action-items?**", async (route) => {
+    if (state === "loading") await waiting;
+    await route.fulfill({
+      status: state === "error" ? 503 : 200,
+      json:
+        state === "error"
+          ? { error: "検証用の一時エラー" }
+          : { ...empty, allTotal: state === "filtered" ? 5 : 0 },
+    });
+  });
+  await page.goto("/action-items");
+  await expect(page.getByRole("status").filter({ hasText: "確認しています" })).toBeVisible();
+  state = "empty";
+  release();
+  await expect(page.getByText("要対応はありません", { exact: true })).toBeVisible();
+  state = "filtered";
+  await page.getByRole("button", { name: "絞り込む" }).click();
+  await expect(page.getByText("条件に一致する要対応はありません")).toBeVisible();
+  state = "error";
+  await page.getByRole("button", { name: "条件を解除" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "検証用の一時エラー" })).toBeVisible();
+  state = "empty";
+  await page.getByRole("button", { name: "再取得する" }).click();
+  await expect(page.getByText("要対応はありません", { exact: true })).toBeVisible();
+});
+
+test("returned action disappears after cancellation", async ({ page }) => {
+  await login(page, employee.email, employee.password);
+  const workDate = "2026-08-06";
+  const created = await page.request.post("/api/attendance/corrections", {
+    data: {
+      workDate,
+      reason: "取消検証",
+      entries: [
+        { type: "clock_in", occurredAt: `${workDate}T00:00:00Z` },
+        { type: "clock_out", occurredAt: `${workDate}T09:00:00Z` },
+      ],
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const cases = (await (await page.request.get("/api/requests")).json()).cases;
+  const item = cases.find((row: { targetDate: string }) => row.targetDate === workDate);
+  expect(item).toBeTruthy();
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const detail = (await (await page.request.get(`/api/approvals/cases/${item.id}`)).json())
+    .approvalCase;
+  const returned = await page.request.post(`/api/approvals/cases/${item.id}`, {
+    data: {
+      action: "return",
+      expectedVersion: detail.case.version,
+      comment: "理由を確認してください",
+    },
+  });
+  expect(returned.ok(), await returned.text()).toBe(true);
+  await login(page, employee.email, employee.password);
+  await page.goto("/action-items?month=2026-08&kind=returned_request");
+  const row = page.locator(".action-item-list > li").filter({ hasText: workDate });
+  await row.getByRole("link", { name: "修正・再申請する" }).click();
+  await page.getByRole("button", { name: "申請を取り消す" }).click();
+  await expect(page.getByText("申請を取り消しました。")).toBeVisible();
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "0件中" })).toBeVisible();
+});
+
+test("action center navigation and candidates follow the signed-in role", async ({ page }) => {
+  await login(page, hrAdmin.email, hrAdmin.password);
+  await page.goto("/action-items");
+  await expect(page.getByRole("heading", { level: 1, name: "要対応", exact: true })).toBeVisible();
+  const manager = await (await page.request.get("/api/action-items")).json();
+  expect(manager.employees.length).toBeGreaterThan(0);
+  await login(page, employee.email, employee.password);
+  await page.goto("/action-items");
+  await expect(page.getByRole("heading", { level: 1, name: "要対応", exact: true })).toBeVisible();
+  const self = await (await page.request.get("/api/action-items")).json();
+  expect(self.employees).toHaveLength(1);
+  expect(
+    self.items.every((item: { employeeId: string }) => item.employeeId === self.employees[0].id),
+  ).toBe(true);
+  const forbidden = await page.request.get(`/api/action-items?employeeId=${crypto.randomUUID()}`);
+  expect(forbidden.status()).toBe(403);
+  await login(page, approver.email, approver.password);
+  await page.goto("/action-items");
+  const reviewer = await (await page.request.get("/api/action-items")).json();
+  expect(reviewer.items.every((item: { kind: string }) => item.kind === "overdue_approval")).toBe(
+    true,
+  );
+});
+
+test("action context preselects leave and absence destinations", async ({ page }) => {
+  const workDate = "2026-08-07";
+  const returnTo = "/action-items?month=2026-08&kind=unresolved_day";
+  await login(page, hrAdmin.email, hrAdmin.password);
+  const people = (await (await page.request.get("/api/employees")).json()).employees;
+  const target = people.find(
+    (person: { employeeNumber: string }) => person.employeeNumber === employee.employeeNumber,
+  );
+  expect(target).toBeTruthy();
+  await page.goto(
+    `/leave/reviews?employeeId=${target.id}&date=${workDate}&returnTo=${encodeURIComponent(returnTo)}`,
+  );
+  await expect(page.locator("#absence-employee")).toHaveValue(target.id);
+  await expect(page.getByLabel("対象日")).toHaveValue(workDate);
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(returnTo);
+  await page.goto(
+    `/approvals/proxy?employeeId=${target.id}&date=${workDate}&kind=leave&returnTo=${encodeURIComponent(returnTo)}`,
+  );
+  await expect(page.getByRole("combobox", { name: "対象従業員" })).toHaveValue(target.id);
+  await expect(page.getByLabel("開始日")).toHaveValue(workDate);
+  await expect(page.getByLabel("終了日")).toHaveValue(workDate);
+  await login(page, employee.email, employee.password);
+  await page.goto(`/leave?date=${workDate}&returnTo=${encodeURIComponent(returnTo)}`);
+  await expect(page.getByLabel("開始日")).toHaveValue(workDate);
+  await expect(page.getByLabel("終了日")).toHaveValue(workDate);
+  await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
+  await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(returnTo);
 });

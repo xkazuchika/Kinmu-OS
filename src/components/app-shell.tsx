@@ -1,5 +1,7 @@
 "use client";
 
+import { safeReturnTo } from "@/lib/navigation-context";
+
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
@@ -153,6 +155,7 @@ function AppShellLayout({ actor, children }: { actor: ShellActor; children: Reac
   const searchParams = useSearchParams();
   const navigation = navigationForRole(actor.role);
   const activeScreen = screenForPath(pathname, actor.role);
+  const actionReturn = safeReturnTo(searchParams.get("returnTo") ?? undefined, actor.role);
   const activeItemId = activeScreen?.navigationId ?? navigation.home.id;
   const [unreadCount, setUnreadCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -254,6 +257,13 @@ function AppShellLayout({ actor, children }: { actor: ShellActor; children: Reac
               </Link>
             ) : null}
           </div>
+        ) : null}
+        {actionReturn?.startsWith("/action-items") ? (
+          <p className="action-return">
+            <Link prefetch={false} href={actionReturn}>
+              要対応一覧へ戻る
+            </Link>
+          </p>
         ) : null}
         {children}
       </div>

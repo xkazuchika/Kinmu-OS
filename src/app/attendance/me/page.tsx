@@ -17,13 +17,17 @@ function hours(minutes: number | null) {
 export default async function MyAttendancePage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string }>;
+  searchParams: Promise<{ month?: string; date?: string; returnTo?: string }>;
 }) {
   const database = getDatabase();
   const cookieStore = await cookies();
   const actor = await sessionForToken(database, cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!actor) redirect("/login");
-  const requestedMonth = (await searchParams).month;
+  const parameters = await searchParams;
+  const requestedMonth = parameters.month;
+  const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(parameters.date ?? "")
+    ? parameters.date
+    : undefined;
   const month = /^\d{4}-\d{2}$/.test(requestedMonth ?? "")
     ? requestedMonth!
     : new Date().toISOString().slice(0, 7);
@@ -51,7 +55,11 @@ export default async function MyAttendancePage({
           },
         ]}
       />
+      {selectedDate ? <p role="status">対象日：{selectedDate}</p> : null}
       <form className="month-filter">
+        {parameters.returnTo ? (
+          <input type="hidden" name="returnTo" value={parameters.returnTo} />
+        ) : null}
         <Field
           defaultValue={month}
           id="attendance-month"
@@ -98,7 +106,11 @@ export default async function MyAttendancePage({
       ) : (
         <AttendanceCorrectionPanel
           closed={attendance.closure.status === "closed"}
-          days={attendance.days}
+          days={
+            selectedDate
+              ? attendance.days.filter((day) => day.workDate === selectedDate)
+              : attendance.days
+          }
           initialHistory={corrections}
           timezone={attendance.timezone}
         />

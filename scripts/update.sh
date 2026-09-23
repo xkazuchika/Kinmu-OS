@@ -14,7 +14,11 @@ else
   exit 1
 fi
 
-compose build migrator app
-compose run --rm migrator
-compose up -d --no-deps app
+compose build migrator app worker
+compose stop worker
+if ! compose run --rm migrator; then
+  echo "Migration failed. Existing app retained; worker remains stopped. Restore the pre-update backup with the matching previous release, or fix the migration and rerun this update." >&2
+  exit 1
+fi
+compose up -d --no-deps app worker
 compose ps

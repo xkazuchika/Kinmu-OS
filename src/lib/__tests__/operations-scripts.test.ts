@@ -120,3 +120,52 @@ cat > "$OPERATIONS_RESTORED"`,
     expect(readdirSync(directory)).not.toContain("restored");
   });
 });
+
+describe("application and worker updates", () => {
+  it("builds first, stops worker before migration and replaces both services only on success", () => {
+    const folder = mkdtempSync(join(tmpdir(), "kinmu-update-"));
+    const bin = join(folder, "bin");
+    mkdirSync(bin);
+    const log = join(folder, "calls");
+    writeFileSync(join(folder, "env"), "POSTGRES_PASSWORD=test\n");
+    writeFileSync(
+      join(bin, "docker"),
+      `#!/bin/sh
+if [ "$2" = version ]; then exit 0; fi
+while [ "$1" != build ] && [ "$1" != stop ] && [ "$1" != run ] && [ "$1" != up ] && [ "$1" != ps ]; do shift; done
+printf '%s\\n' "$*" >> "$UPDATE_LOG"
+if [ "$1" = "$UPDATE_FAIL" ]; then exit 1; fi
+`,
+      { mode: 0o700 },
+    );
+    try {
+      for (const failure of ["", "build", "run"]) {
+        writeFileSync(log, "");
+        const result = spawnSync("sh", [resolve("scripts/update.sh")], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            ENV_FILE: join(folder, "env"),
+            UPDATE_LOG: log,
+            UPDATE_FAIL: failure,
+          },
+        });
+        const calls = readFileSync(log, "utf8").trim().split("\n");
+        expect(calls[0]).toBe("build migrator app worker");
+        if (failure === "build") expect(calls).toHaveLength(1);
+        else {
+          expect(calls[1]).toBe("stop worker");
+          expect(calls[2]).toBe("run --rm migrator");
+          if (failure === "run") {
+            expect(calls).toHaveLength(3);
+            expect(result.stderr).toContain("worker remains stopped");
+          } else expect(calls[3]).toBe("up -d --no-deps app worker");
+        }
+        expect(result.status).toBe(failure ? 1 : 0);
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+});

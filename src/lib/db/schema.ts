@@ -114,6 +114,7 @@ export const overtimeReconciliationStatus = pgEnum("overtime_reconciliation_stat
   "unapproved_actual",
 ]);
 export const notificationKind = pgEnum("notification_kind", [
+  "action_items_reminder",
   "overtime_request_submitted",
   "overtime_request_cancelled",
   "overtime_request_approved",

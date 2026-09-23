@@ -298,6 +298,33 @@ async function createLegacyRequests(connection: postgres.Sql) {
 }
 
 describeDatabase("v0.8 approval migration", () => {
+  it("upgrades v0.8 notifications without losing read state and enforces reminder ownership", async () => {
+    await withTemporaryDatabase(databaseUrl!, async (connection) => {
+      const files = await migrationFiles();
+      await applyMigrationFiles(
+        connection,
+        files.filter((file) => Number(file.slice(0, 4)) <= 16),
+      );
+      await createLegacyRequests(connection);
+      await applyMigrationFiles(
+        connection,
+        files.filter((file) => Number(file.slice(0, 4)) === 17),
+      );
+      const previous = await connection`SELECT * FROM notifications ORDER BY id`;
+      await applyMigrationFiles(
+        connection,
+        files.filter((file) => Number(file.slice(0, 4)) >= 18),
+      );
+      expect(await connection`SELECT * FROM notifications ORDER BY id`).toEqual(previous);
+      const [recipient] =
+        await connection`SELECT id, organization_id FROM users WHERE role = 'employee'`;
+      await connection`INSERT INTO notifications (organization_id, recipient_user_id, kind, title, summary, entity_type, entity_id, event_key) VALUES (${recipient.organization_id}, ${recipient.id}, 'action_items_reminder', '要対応', '確認してください', 'action_center', ${recipient.id}, 'migration-reminder')`;
+      await expect(
+        connection`INSERT INTO notifications (organization_id, recipient_user_id, kind, title, summary, entity_type, entity_id) VALUES (${recipient.organization_id}, ${recipient.id}, 'action_items_reminder', '要対応', '確認してください', 'action_center', gen_random_uuid())`,
+      ).rejects.toThrow("must target its recipient");
+    });
+  });
+
   it("checks untouched backfills strictly but permits later operation timestamps on upgrade", async () => {
     await withTemporaryDatabase(databaseUrl!, async (connection) => {
       const files = await migrationFiles();

@@ -17,13 +17,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "reminders": "tsx src/workers/action-reminders.ts",
+    "reminders:once": "tsx src/workers/action-reminders.ts --once"
   },
   "dependencies": {
     "@node-rs/argon2": "2.0.2",
     "drizzle-orm": "0.45.2",
     "iconv-lite": "0.7.3",
-    "next": "16.2.11",
+    "next": "16.3.3",
     "postgres": "3.4.9",
     "react": "19.2.7",
     "react-dom": "19.2.7",
@@ -36,10 +38,10 @@
     "@types/react-dom": "19.2.3",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.1",
-    "eslint-config-next": "16.2.11",
+    "eslint-config-next": "16.3.3",
     "prettier": "3.9.5",
     "tsx": "4.21.0",
     "typescript": "5.9.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }

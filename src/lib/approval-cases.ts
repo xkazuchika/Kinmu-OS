@@ -1,3 +1,4 @@
+import { canReviewCase, isSelfReview } from "@/lib/approval-access";
 import { and, asc, count, desc, eq, gte, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import type { ApprovalCaseSnapshot, ApprovalRequestType } from "@/lib/approval-types";
@@ -488,10 +489,7 @@ export async function getApprovalCaseDetail(db: AppDatabase, actor: SessionActor
     ...context,
     assignedApproverName: assignedApprover[0]?.displayName ?? null,
     canManage: can(actor, "approvals:manage"),
-    canReview:
-      context.case.status === "pending" &&
-      context.case.submittedByUserId !== actor.userId &&
-      context.targetEmployeeUserId !== actor.userId,
+    canReview: canReviewCase(actor, context.case, context.targetEmployeeUserId),
     domain,
     originalApproverName: originalApprover[0]?.displayName ?? null,
     revisions,
@@ -507,10 +505,7 @@ export async function assertApprovalReviewAccess(
 ) {
   requirePermission(actor, "approvals:review");
   const context = await scopedApprovalCase(db, actor, caseId);
-  if (
-    context.case.submittedByUserId === actor.userId ||
-    context.targetEmployeeUserId === actor.userId
-  ) {
+  if (isSelfReview(actor.userId, context.case.submittedByUserId, context.targetEmployeeUserId)) {
     await recordAudit(db, {
       action: "approval_self_review_rejected",
       actorUserId: actor.userId,

@@ -30,12 +30,12 @@ describe("user guide catalog", () => {
       guidesForRole("employee")
         .slice(0, 2)
         .map((guide) => guide.slug),
-    ).toEqual(["overtime-requests", "notifications"]);
+    ).toEqual(["workflow", "overtime-requests"]);
     expect(
       guidesForRole("hr_admin")
         .slice(0, 3)
         .map((guide) => guide.slug),
-    ).toEqual(["admin-setup", "work-calendar", "leave-management"]);
+    ).toEqual(["workflow", "admin-setup", "work-calendar"]);
     expect(guideCatalog.map((guide) => guide.slug)).toEqual(
       expect.arrayContaining([
         "overtime-requests",

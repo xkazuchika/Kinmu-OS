@@ -3,6 +3,7 @@ import type { GuideRole } from "@/lib/user-guide";
 
 const RETURN_QUERY_KEYS = new Set([
   "date",
+  "kind",
   "departmentId",
   "employeeId",
   "month",
