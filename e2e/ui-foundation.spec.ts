@@ -1053,9 +1053,12 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   await expect(page.getByRole("heading", { level: 1, name: "利用ガイド" })).toBeVisible();
   await expect(page.getByText("ログイン中の役割: 労務管理者")).toBeVisible();
   const adminCards = page.locator(".guide-card");
-  await expect(adminCards.first()).toContainText("初期設定と従業員管理");
+  await expect(adminCards.first()).toContainText("業務の全体フロー");
   await adminCards.first().focus();
   await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/guide\/workflow$/);
+  await expect(page.getByRole("heading", { level: 1, name: "業務の全体フロー" })).toBeVisible();
+  await page.locator(".guide-prose").getByRole("link", { name: "初期設定と従業員管理" }).click();
   await expect(page).toHaveURL(/\/guide\/admin-setup$/);
   await expect(page.getByRole("heading", { level: 1, name: "初期設定と従業員管理" })).toBeVisible();
   await expect(page.locator(".guide-breadcrumb")).toContainText("利用ガイド");
@@ -1065,7 +1068,7 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   const articleHrefs = await page
     .locator(".guide-card")
     .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute("href")));
-  expect(articleHrefs).toHaveLength(13);
+  expect(articleHrefs).toHaveLength(14);
   for (const href of articleHrefs) {
     expect(href).toBeTruthy();
     const response = await page.goto(href!);
@@ -1087,12 +1090,15 @@ test("role-specific guide navigation is accessible and responsive", async ({ pag
   const forbiddenGuide = await page.goto("/guide/admin-setup");
   expect(forbiddenGuide?.status()).toBe(404);
   await page.goto("/guide");
-  await expect(page.locator(".guide-card").first()).toContainText("残業・休日出勤申請");
+  await expect(page.locator(".guide-card").first()).toContainText("業務の全体フロー");
   await page.locator(".guide-card").first().click();
-  await expect(page).toHaveURL(/\/guide\/overtime-requests$/);
+  await expect(page).toHaveURL(/\/guide\/workflow$/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+  await expect(page.getByRole("heading", { level: 1, name: "業務の全体フロー" })).toBeVisible();
+  await page.locator(".guide-prose").getByRole("link", { name: "残業・休日出勤" }).click();
+  await expect(page).toHaveURL(/\/guide\/overtime-requests$/);
   await expect(page.getByRole("heading", { level: 1, name: "残業・休日出勤申請" })).toBeVisible();
   await expect(page.locator(".guide-breadcrumb")).toContainText("残業・休日出勤申請");
   await page.screenshot({ fullPage: true, path: "/tmp/kinmu-guide-mobile.png" });
@@ -1473,7 +1479,7 @@ test("action center preserves filters, preselects correction context and resolve
   await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
   await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(returnTo);
   await row.getByRole("link", { name: "勤務実績を確認" }).click();
-  await expect(page.locator("#absence-employee")).toHaveValue(target.id);
+  await expect(page.locator("#attendance-filter-employee")).toHaveValue(target.id);
   await expect(page.getByRole("row").filter({ hasText: workDate })).toHaveCount(1);
   await page.getByRole("link", { name: "要対応一覧へ戻る" }).click();
   await login(page, employee.email, employee.password);
